@@ -9,6 +9,7 @@ const PAD = 5
 const MERMAID_FENCE = /^\s*(```|~~~)\s*mermaid\b/m
 // the transcript's own gutter beside the reply
 const GUTTER = 4
+const BULLET_COLUMNS = 2
 
 // CJK and fullwidth forms take two cells
 const cellsOf = (s: string): number => {
@@ -42,13 +43,21 @@ export const tableCellsOf = (text: string): number => {
 export const register: Register = on => {
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (MERMAID_FENCE.test(e.props.text)) return next(e)
-    const { Box, Markdown } = $.ui.resolve(e)
+    const { Box, Markdown, Text } = $.ui.resolve(e)
     // shrink the padding just enough for the widest table to keep its natural width
     const spare = (e.viewport?.columns ?? 80) - GUTTER - tableCellsOf(e.props.text)
     const pad = Math.max(0, Math.min(PAD, Math.floor(spare / 2)))
+    // the reply's bullet hangs in the left padding, in a column every block keeps
+    // so text stays aligned; at pad 0 that column is the engine's own bullet column
+    const left = Math.max(pad, BULLET_COLUMNS) - BULLET_COLUMNS
     return (
-      <Box flexDirection="column" paddingX={pad} marginTop={e.props.isFirstOfReply ? 1 : 0}>
-        <Markdown text={e.props.text} />
+      <Box flexDirection="row" paddingLeft={left} paddingRight={pad} marginTop={e.props.isFirstOfReply ? 1 : 0}>
+        <Box width={BULLET_COLUMNS} flexShrink={0}>
+          <Text>{e.props.isFirstOfReply ? '●' : ' '}</Text>
+        </Box>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+          <Markdown text={e.props.text} />
+        </Box>
       </Box>
     )
   })

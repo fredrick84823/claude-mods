@@ -11,8 +11,14 @@ test('plain reply is re-drawn as Markdown inside a padded Box', async $ => {
       props: { text: '| a | b |\n|---|---|\n| 1 | 2 |', isFirstOfReply: true },
     })
     const tree = await ui.drawn()
-    expect(tree).toMatchObject({ type: 'Box', props: { paddingX: 5, marginTop: 1 } })
+    expect(tree).toMatchObject({ type: 'Box', props: { paddingLeft: 3, paddingRight: 5, marginTop: 1 } })
     expect(JSON.stringify(tree)).toContain('Markdown')
+    expect(JSON.stringify(tree)).toContain('●')
+    const later = await $.ui.mount({
+      plugin: 'calm-ui', surface, component: 'AssistantMessage',
+      props: { text: 'second block', isFirstOfReply: false },
+    })
+    expect(JSON.stringify(await later.drawn())).not.toContain('●')
   }
 })
 
@@ -64,19 +70,19 @@ test('a table that would need shrinking drops the padding', async $ => {
       viewport: { columns: 70, rows: 40 },
       props: { text: WIDE, isFirstOfReply: true },
     })
-    expect(await narrow.drawn()).toMatchObject({ props: { paddingX: 0 } })
+    expect(await narrow.drawn()).toMatchObject({ props: { paddingLeft: 0, paddingRight: 0 } })
     const wide = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'AssistantMessage',
       viewport: { columns: 200, rows: 40 },
       props: { text: WIDE, isFirstOfReply: true },
     })
-    expect(await wide.drawn()).toMatchObject({ props: { paddingX: 5 } })
+    expect(await wide.drawn()).toMatchObject({ props: { paddingLeft: 3, paddingRight: 5 } })
     // 80 cols: (80 - 4 - 80) / 2 < 0 → 0; 88 cols: (88 - 4 - 80) / 2 = 2
     const mid = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'AssistantMessage',
       viewport: { columns: 88, rows: 40 },
       props: { text: WIDE, isFirstOfReply: true },
     })
-    expect(await mid.drawn()).toMatchObject({ props: { paddingX: 2 } })
+    expect(await mid.drawn()).toMatchObject({ props: { paddingLeft: 0, paddingRight: 2 } })
   }
 })
