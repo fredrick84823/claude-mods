@@ -10,6 +10,8 @@ const MERMAID_FENCE = /^\s*(```|~~~)\s*mermaid\b/m
 // the transcript's own gutter beside the reply
 const GUTTER = 4
 const BULLET_COLUMNS = 2
+// Claude orange, the colour of Claude Code's own logo and spinner
+const BULLET_COLOR = '#D77757'
 
 // CJK and fullwidth forms take two cells
 const cellsOf = (s: string): number => {
@@ -53,7 +55,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="row" paddingLeft={left} paddingRight={pad} marginTop={e.props.isFirstOfReply ? 1 : 0}>
         <Box width={BULLET_COLUMNS} flexShrink={0}>
-          <Text>{e.props.isFirstOfReply ? '●' : ' '}</Text>
+          <Text color={BULLET_COLOR}>{e.props.isFirstOfReply ? '●' : ' '}</Text>
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1}>
           <Markdown text={e.props.text} />
