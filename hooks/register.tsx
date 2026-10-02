@@ -1,0 +1,67 @@
+import type { Register } from 'claude-code'
+
+// Presentation only. The engine's own drawing is laid out at full terminal
+// width, so wrapping it in padding wraps its tables. Instead we re-draw the
+// reply's markdown inside a padded Box, where it lays out to the narrower room.
+// A reply still holding a ```mermaid fence is left to claude-mermaid untouched.
+
+const PAD = 5
+const MERMAID_FENCE = /^\s*(```|~~~)\s*mermaid\b/m
+// the transcript's own gutter beside the reply
+const GUTTER = 4
+
+// CJK and fullwidth forms take two cells
+const cellsOf = (s: string): number => {
+  let n = 0
+  for (const ch of s) n += /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(ch) ? 2 : 1
+  return n
+}
+
+// Widest markdown table's natural width in cells, 0 when none.
+// Markdown shrinks a table against the terminal's width, not our padded box,
+// so a table that needs shrinking overflows by the padding and its rows wrap.
+// ponytail: strips only ` * _ inline marks; links etc. overestimate, which just drops padding early
+export const tableCellsOf = (text: string): number => {
+  let widest = 0
+  let cols: number[] = []
+  for (const line of [...text.split('\n'), '']) {
+    const t = line.trim()
+    if (!t.startsWith('|')) {
+      if (cols.length) widest = Math.max(widest, cols.reduce((a, w) => a + w + 3, 1))
+      cols = []
+      continue
+    }
+    if (/^\|[\s:|-]+\|$/.test(t)) continue
+    t.replace(/^\||\|$/g, '').split('|').forEach((cell, i) => {
+      cols[i] = Math.max(cols[i] ?? 0, cellsOf(cell.trim().replace(/[`*_]/g, '')))
+    })
+  }
+  return widest
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (MERMAID_FENCE.test(e.props.text)) return next(e)
+    const { Box, Markdown } = $.ui.resolve(e)
+    // shrink the padding just enough for the widest table to keep its natural width
+    const spare = (e.viewport?.columns ?? 80) - GUTTER - tableCellsOf(e.props.text)
+    const pad = Math.max(0, Math.min(PAD, Math.floor(spare / 2)))
+    return (
+      <Box flexDirection="column" paddingX={pad} marginTop={e.props.isFirstOfReply ? 1 : 0}>
+        <Markdown text={e.props.text} />
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    // the person's own prompt opens a new turn: room above, nothing else
+    if (e.props.origin.kind !== 'composer') return next(e)
+    const drawn = await next(e)
+    const { Box } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        {drawn}
+      </Box>
+    )
+  })
+}
