@@ -1,4 +1,5 @@
 import type { Register } from 'claude-code'
+import { COMPACT_TOOLS, callOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
 // width, so wrapping it in padding wraps its tables. Instead we re-draw the
@@ -10,6 +11,8 @@ const MERMAID_FENCE = /^\s*(```|~~~)\s*mermaid\b/m
 // the transcript's own gutter beside the reply
 const GUTTER = 4
 const BULLET_COLUMNS = 2
+// tool names padded to one column so summaries line up
+const TOOL_COLUMNS = 7
 // Claude orange, the colour of Claude Code's own logo and spinner
 const BULLET_COLOR = '#D77757'
 
@@ -62,6 +65,32 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+  })
+
+  // Read / Bash rows: one dim line, `Read   path · 218 lines`. Errors stay loud:
+  // the header says failed and the engine's ToolResult below shows the error text.
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (!COMPACT_TOOLS.has(e.props.tool)) return next(e)
+    const { isRunning, isErrored, isInterrupted, output } = e.props
+    const state = isRunning ? '…' : isInterrupted ? 'interrupted' : isErrored ? 'failed' : resultOf(e.props.tool, output)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="row" paddingLeft={PAD}>
+        <Box width={TOOL_COLUMNS} flexShrink={0}>
+          <Text dimColor={!isErrored} color={isErrored ? 'red' : undefined}>{e.props.tool}</Text>
+        </Box>
+        <Text dimColor={!isErrored} bold={isErrored} wrap="truncate-end">
+          {[callOf(e.props.tool, e.props.input), state].filter(Boolean).join(' · ')}
+        </Text>
+      </Box>
+    )
+  })
+
+  // the summary already sits on the ToolUse line; a successful result draws nothing
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (!COMPACT_TOOLS.has(e.props.tool) || e.props.isErrored) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
   })
 
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
