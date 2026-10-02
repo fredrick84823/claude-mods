@@ -50,9 +50,10 @@ export const resultOf = (tool: string, output: unknown): string => {
   if (tool === 'Bash') {
     if (o.backgroundTaskId) return 'background'
     if (o.interrupted) return 'interrupted'
-    // the last line is usually the verdict: "42 passed", "Done", a count
-    const last = str(o.stdout).trim().split('\n').pop()?.trim() ?? ''
-    return last ? clip(last, 40) : 'no output'
+    // one line is the answer itself; more is output whose last line is often noise
+    const lines = str(o.stdout).trim().split('\n').filter(l => l.trim())
+    if (lines.length === 0) return 'no output'
+    return lines.length === 1 ? clip(lines[0]!.trim(), 40) : `${lines.length} lines`
   }
   return ''
 }
