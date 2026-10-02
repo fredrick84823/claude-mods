@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
-import { callOf, resultOf } from '../hooks/tools'
+import { callOf, commandOf, errorLinesOf, resultOf } from '../hooks/tools'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -12,6 +12,12 @@ test('summaries for Read and Bash', () => {
   expect(resultOf('Bash', { stdout: '...\n42 passed\n', stderr: '', interrupted: false })).toBe('42 passed')
   expect(resultOf('Bash', { stdout: '', stderr: '', interrupted: false })).toBe('no output')
   expect(resultOf('Bash', { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' })).toBe('background')
+  expect(commandOf('Bash', { command: 'pytest -q', description: 'Run tests' })).toBe('$ pytest -q')
+  expect(commandOf('Bash', { command: 'a\nb', description: 'Two' })).toBe('$ a …')
+  // no description: the command is already the first line
+  expect(commandOf('Bash', { command: 'pytest -q' })).toBeNull()
+  expect(commandOf('Read', { file_path: '/x' })).toBeNull()
+  expect(errorLinesOf('Exit code 1\n\nls: /x: No such file\na\nb')).toEqual(['Exit code 1', 'ls: /x: No such file', 'a'])
 })
 
 const BASH = { tool_use_id: 't1', tool: 'Bash', input: { command: 'pytest', description: 'Run tests' }, isRunning: false, isInterrupted: false }
@@ -25,13 +31,15 @@ test('Bash row is one line with its verdict; failure is loud', async $ => {
     const okTree = JSON.stringify(await ok.drawn())
     expect(okTree).toContain('Run tests · 42 passed')
     expect(okTree).toContain('"dimColor":true')
+    expect(okTree).toContain('$ pytest')
     const bad = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'ToolUse',
-      props: { ...BASH, isErrored: true, output: 'Exit code 1' },
+      props: { ...BASH, isErrored: true, output: 'Exit code 1\nls: /x: No such file or directory' },
     })
     const badTree = JSON.stringify(await bad.drawn())
     expect(badTree).toContain('Run tests · failed')
     expect(badTree).toContain('"bold":true')
+    expect(badTree).toContain('No such file or directory')
   }
 })
 

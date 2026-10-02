@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { COMPACT_TOOLS, callOf, resultOf } from './tools'
+import { COMPACT_TOOLS, callOf, commandOf, errorLinesOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
 // width, so wrapping it in padding wraps its tables. Instead we re-draw the
@@ -73,15 +73,30 @@ export const register: Register = on => {
     if (!COMPACT_TOOLS.has(e.props.tool)) return next(e)
     const { isRunning, isErrored, isInterrupted, output } = e.props
     const state = isRunning ? '…' : isInterrupted ? 'interrupted' : isErrored ? 'failed' : resultOf(e.props.tool, output)
+    const command = commandOf(e.props.tool, e.props.input)
+    // the error text is drawn by the row we replace, so we draw its head ourselves
+    const errors = isErrored ? errorLinesOf(output) : []
     const { Box, Text } = $.ui.resolve(e)
     return (
-      <Box flexDirection="row" paddingLeft={PAD}>
-        <Box width={TOOL_COLUMNS} flexShrink={0}>
-          <Text dimColor={!isErrored} color={isErrored ? 'red' : undefined}>{e.props.tool}</Text>
+      <Box flexDirection="column" paddingLeft={PAD}>
+        <Box flexDirection="row">
+          <Box width={TOOL_COLUMNS} flexShrink={0}>
+            <Text dimColor={!isErrored} color={isErrored ? 'red' : undefined}>{e.props.tool}</Text>
+          </Box>
+          <Text dimColor={!isErrored} bold={isErrored} wrap="truncate-end">
+            {[callOf(e.props.tool, e.props.input), state].filter(Boolean).join(' · ')}
+          </Text>
         </Box>
-        <Text dimColor={!isErrored} bold={isErrored} wrap="truncate-end">
-          {[callOf(e.props.tool, e.props.input), state].filter(Boolean).join(' · ')}
-        </Text>
+        {command && (
+          <Box paddingLeft={TOOL_COLUMNS}>
+            <Text dimColor wrap="truncate-end">{command}</Text>
+          </Box>
+        )}
+        {errors.map((line, i) => (
+          <Box key={`err${i}`} paddingLeft={TOOL_COLUMNS}>
+            <Text color="red" wrap="truncate-end">{line}</Text>
+          </Box>
+        ))}
       </Box>
     )
   })

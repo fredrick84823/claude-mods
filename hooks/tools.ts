@@ -17,6 +17,18 @@ export const callOf = (tool: string, input: unknown): string => {
   return ''
 }
 
+// Bash's command on a line of its own, when the first line shows the description
+export const commandOf = (tool: string, input: unknown): string | null => {
+  const i = obj(input)
+  if (tool !== 'Bash' || !str(i.description)) return null
+  const lines = str(i.command).trim().split('\n')
+  return `$ ${lines[0]}${lines.length > 1 ? ' …' : ''}`
+}
+
+// a failed call's output is the error text the model read: show its head
+export const errorLinesOf = (output: unknown, max = 3): string[] =>
+  str(output).split('\n').map(l => l.trim()).filter(Boolean).slice(0, max)
+
 export const resultOf = (tool: string, output: unknown): string => {
   const o = obj(output)
   if (tool === 'Read') {
