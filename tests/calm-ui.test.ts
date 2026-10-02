@@ -14,7 +14,7 @@ test('plain reply is re-drawn as Markdown inside a padded Box', async $ => {
     expect(tree).toMatchObject({ type: 'Box', props: { paddingLeft: 2, paddingRight: 5, marginTop: 1 } })
     expect(JSON.stringify(tree)).toContain('Markdown')
     expect(JSON.stringify(tree)).toContain('●')
-    expect(JSON.stringify(tree)).toContain('#D77757')
+    expect(JSON.stringify(tree)).toContain('#6F4E37')
     const later = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'AssistantMessage',
       props: { text: 'second block', isFirstOfReply: false },
@@ -51,6 +51,7 @@ test('composer prompt is re-drawn padded like a reply; other user rows pass thro
     expect(tree).toMatchObject({ type: 'Box', props: { paddingLeft: 2, paddingRight: 5, marginTop: 1 } })
     expect(JSON.stringify(tree)).toContain('hi there')
     expect(JSON.stringify(tree)).toContain('userMessageBackground')
+    expect(JSON.stringify(tree)).toContain('"paddingY":1')
     expect(JSON.stringify(tree)).not.toContain('ENGINE')
     const other = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'UserMessage',
