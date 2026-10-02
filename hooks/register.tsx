@@ -16,6 +16,8 @@ const GUTTER = 4 + (BULLET_COLUMNS - 2)
 const TOOL_COLUMNS = 7
 // Claude orange, the colour of Claude Code's own logo and spinner
 const BULLET_COLOR = '#D77757'
+// a theme key, so light and dark themes each get their own
+const PROMPT_BACKGROUND = 'userMessageBackground'
 
 // CJK and fullwidth forms take two cells
 const cellsOf = (s: string): number => {
@@ -109,14 +111,22 @@ export const register: Register = on => {
     return <Box />
   })
 
+  // The person's prompt: same side room as a reply, its marker in the bullet column,
+  // on the theme's own prompt background but only as wide as the text column.
+  // Re-drawn rather than wrapped: the engine's row spans the full width.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    // the person's own prompt opens a new turn: room above, nothing else
     if (e.props.origin.kind !== 'composer') return next(e)
-    const drawn = await next(e)
-    const { Box } = $.ui.resolve(e)
+    const { Box, Text } = $.ui.resolve(e)
     return (
-      <Box flexDirection="column" marginTop={1}>
-        {drawn}
+      <Box paddingLeft={PAD - BULLET_COLUMNS} paddingRight={PAD} marginTop={1}>
+        <Box flexDirection="row" flexGrow={1} backgroundColor={PROMPT_BACKGROUND}>
+          <Box width={BULLET_COLUMNS} flexShrink={0}>
+            <Text dimColor>{'❯'}</Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1} paddingRight={1}>
+            <Text>{e.props.text}</Text>
+          </Box>
+        </Box>
       </Box>
     )
   })

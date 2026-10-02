@@ -37,22 +37,26 @@ test('reply with a mermaid fence is passed to the chain untouched', async ($, on
   }
 })
 
-test('composer prompt gets top margin, other user rows pass through', async ($, on) => {
+test('composer prompt is re-drawn padded like a reply; other user rows pass through', async ($, on) => {
   on('ui.render', { component: 'UserMessage' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
-    return h(Text, null, e.props.text) as RenderElement
+    return h(Text, null, 'ENGINE') as RenderElement
   })
   for (const surface of SURFACES) {
     const prompt = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'UserMessage',
-      props: { text: 'hi', origin: { kind: 'composer' }, isExpanded: true },
+      props: { text: 'hi there', origin: { kind: 'composer' }, isExpanded: true },
     })
-    expect(await prompt.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
+    const tree = await prompt.drawn()
+    expect(tree).toMatchObject({ type: 'Box', props: { paddingLeft: 2, paddingRight: 5, marginTop: 1 } })
+    expect(JSON.stringify(tree)).toContain('hi there')
+    expect(JSON.stringify(tree)).toContain('userMessageBackground')
+    expect(JSON.stringify(tree)).not.toContain('ENGINE')
     const other = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'UserMessage',
       props: { text: 'done', origin: { kind: 'unclassified' }, isExpanded: false },
     })
-    expect(await other.drawn()).toMatchObject({ type: 'Text' })
+    expect(JSON.stringify(await other.drawn())).toContain('ENGINE')
   }
 })
 
