@@ -25,9 +25,21 @@ export const commandOf = (tool: string, input: unknown): string | null => {
   return `$ ${lines[0]}${lines.length > 1 ? ' …' : ''}`
 }
 
-// a failed call's output is the error text the model read: show its head
+const EXIT_LINE = /^(Error: )?Exit code (\d+)$/
+
+// a failed Bash's exit code, from the error text the model read
+export const exitCodeOf = (output: unknown): string | null => {
+  for (const l of str(output).split('\n')) {
+    const m = l.trim().match(EXIT_LINE)
+    if (m) return m[2]!
+  }
+  return null
+}
+
+// a failed call's output is the error text the model read: show its head,
+// less the exit-code line the header already carries
 export const errorLinesOf = (output: unknown, max = 3): string[] =>
-  str(output).split('\n').map(l => l.trim()).filter(Boolean).slice(0, max)
+  str(output).split('\n').map(l => l.trim()).filter(l => l && !EXIT_LINE.test(l)).slice(0, max)
 
 export const resultOf = (tool: string, output: unknown): string => {
   const o = obj(output)

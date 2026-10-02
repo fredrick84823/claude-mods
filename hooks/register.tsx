@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { COMPACT_TOOLS, callOf, commandOf, errorLinesOf, resultOf } from './tools'
+import { COMPACT_TOOLS, callOf, commandOf, errorLinesOf, exitCodeOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
 // width, so wrapping it in padding wraps its tables. Instead we re-draw the
@@ -73,7 +73,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
     if (!COMPACT_TOOLS.has(e.props.tool)) return next(e)
     const { isRunning, isErrored, isInterrupted, output } = e.props
-    const state = isRunning ? '…' : isInterrupted ? 'interrupted' : isErrored ? 'failed' : resultOf(e.props.tool, output)
+    const state = isRunning ? '…' : isInterrupted ? 'interrupted' : isErrored ? ['failed', exitCodeOf(output) && `exit ${exitCodeOf(output)}`].filter(Boolean).join(' · ') : resultOf(e.props.tool, output)
     const command = commandOf(e.props.tool, e.props.input)
     // the error text is drawn by the row we replace, so we draw its head ourselves
     const errors = isErrored ? errorLinesOf(output) : []

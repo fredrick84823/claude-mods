@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
-import { callOf, commandOf, errorLinesOf, resultOf } from '../hooks/tools'
+import { callOf, commandOf, errorLinesOf, exitCodeOf, resultOf } from '../hooks/tools'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -17,7 +17,10 @@ test('summaries for Read and Bash', () => {
   // no description: the command is already the first line
   expect(commandOf('Bash', { command: 'pytest -q' })).toBeNull()
   expect(commandOf('Read', { file_path: '/x' })).toBeNull()
-  expect(errorLinesOf('Exit code 1\n\nls: /x: No such file\na\nb')).toEqual(['Exit code 1', 'ls: /x: No such file', 'a'])
+  expect(errorLinesOf('Exit code 1\n\nls: /x: No such file\na\nb')).toEqual(['ls: /x: No such file', 'a', 'b'])
+  expect(errorLinesOf('Error: Exit code 2\nboom')).toEqual(['boom'])
+  expect(exitCodeOf('Error: Exit code 2\nboom')).toBe('2')
+  expect(exitCodeOf('permission denied')).toBeNull()
 })
 
 const BASH = { tool_use_id: 't1', tool: 'Bash', input: { command: 'pytest', description: 'Run tests' }, isRunning: false, isInterrupted: false }
@@ -37,7 +40,7 @@ test('Bash row is one line with its verdict; failure is loud', async $ => {
       props: { ...BASH, isErrored: true, output: 'Exit code 1\nls: /x: No such file or directory' },
     })
     const badTree = JSON.stringify(await bad.drawn())
-    expect(badTree).toContain('Run tests · failed')
+    expect(badTree).toContain('Run tests · failed · exit 1')
     expect(badTree).toContain('"bold":true')
     expect(badTree).toContain('No such file or directory')
   }
