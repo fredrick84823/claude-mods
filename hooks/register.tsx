@@ -14,8 +14,9 @@ const BULLET_COLUMNS = 3
 const GUTTER = 4 + (BULLET_COLUMNS - 2)
 // tool names padded to one column so summaries line up
 const TOOL_COLUMNS = 7
-// dark iron grey: Everforest's own dark tone, set apart from its blue-grey text by lightness
-const ACCENT = '#3D484D'
+// undefined: the terminal's own text colour, as Claude Code draws its bullet.
+// A raw colour ('#D77757', Claude orange) or a theme key also works here.
+const ACCENT: string | undefined = undefined
 // a theme key, so light and dark themes each get their own
 const PROMPT_BACKGROUND = 'userMessageBackground'
 // left three-eighths block on the card's background: the line is the card's outer edge
