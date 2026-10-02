@@ -18,6 +18,9 @@ const TOOL_COLUMNS = 7
 const ACCENT = '#6F4E37'
 // a theme key, so light and dark themes each get their own
 const PROMPT_BACKGROUND = 'userMessageBackground'
+// right one-eighth block: a hairline hugging the card's left edge
+// ponytail: 200 rows; a prompt card taller than that shows the bar only on its top 200
+const BAR = Array(200).fill('▕').join('\n')
 
 // CJK and fullwidth forms take two cells
 const cellsOf = (s: string): number => {
@@ -119,7 +122,13 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box paddingLeft={PAD - BULLET_COLUMNS} paddingRight={PAD} marginTop={1}>
-        <Box width={1} flexShrink={0} backgroundColor={ACCENT} />
+        {/* a cell-wide column whose height the card sets; the thin glyphs are an
+            absolute layer clipped to it, so their count never sizes the row */}
+        <Box width={1} flexShrink={0}>
+          <Box position="absolute" top={0} left={0} width={1} height="100%" overflow="hidden">
+            <Text color={ACCENT}>{BAR}</Text>
+          </Box>
+        </Box>
         <Box
           flexGrow={1}
           flexShrink={1}
