@@ -14,8 +14,8 @@ const BULLET_COLUMNS = 3
 const GUTTER = 4 + (BULLET_COLUMNS - 2)
 // tool names padded to one column so summaries line up
 const TOOL_COLUMNS = 7
-// dark coffee: a warm accent that stands apart from Everforest Light's blue-grey text
-const ACCENT = '#6F4E37'
+// dark iron grey: Everforest's own dark tone, set apart from its blue-grey text by lightness
+const ACCENT = '#3D484D'
 // a theme key, so light and dark themes each get their own
 const PROMPT_BACKGROUND = 'userMessageBackground'
 // left three-eighths block on the card's background: the line is the card's outer edge

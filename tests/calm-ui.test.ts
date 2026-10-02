@@ -14,7 +14,7 @@ test('plain reply is re-drawn as Markdown inside a padded Box', async $ => {
     expect(tree).toMatchObject({ type: 'Box', props: { paddingLeft: 2, paddingRight: 5, marginTop: 1 } })
     expect(JSON.stringify(tree)).toContain('Markdown')
     expect(JSON.stringify(tree)).toContain('●')
-    expect(JSON.stringify(tree)).toContain('#6F4E37')
+    expect(JSON.stringify(tree)).toContain('#3D484D')
     const later = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'AssistantMessage',
       props: { text: 'second block', isFirstOfReply: false },
