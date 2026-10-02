@@ -8,9 +8,10 @@ import { COMPACT_TOOLS, callOf, commandOf, errorLinesOf, resultOf } from './tool
 
 const PAD = 5
 const MERMAID_FENCE = /^\s*(```|~~~)\s*mermaid\b/m
-// the transcript's own gutter beside the reply
-const GUTTER = 4
-const BULLET_COLUMNS = 2
+// bullet + gap before the text; the engine's own is 2
+const BULLET_COLUMNS = 3
+// the transcript's own gutter beside the reply, plus what our bullet column adds over the engine's
+const GUTTER = 4 + (BULLET_COLUMNS - 2)
 // tool names padded to one column so summaries line up
 const TOOL_COLUMNS = 7
 // Claude orange, the colour of Claude Code's own logo and spinner
