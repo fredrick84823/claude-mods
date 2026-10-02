@@ -18,9 +18,9 @@ const TOOL_COLUMNS = 7
 const ACCENT = '#6F4E37'
 // a theme key, so light and dark themes each get their own
 const PROMPT_BACKGROUND = 'userMessageBackground'
-// right one-eighth block: a hairline hugging the card's left edge
+// left three-eighths block on the card's background: the line is the card's outer edge
 // ponytail: 200 rows; a prompt card taller than that shows the bar only on its top 200
-const BAR = Array(200).fill('▕').join('\n')
+const BAR = Array(200).fill('▍').join('\n')
 
 // CJK and fullwidth forms take two cells
 const cellsOf = (s: string): number => {
@@ -126,7 +126,7 @@ export const register: Register = on => {
             absolute layer clipped to it, so their count never sizes the row */}
         <Box width={1} flexShrink={0}>
           <Box position="absolute" top={0} left={0} width={1} height="100%" overflow="hidden">
-            <Text color={ACCENT}>{BAR}</Text>
+            <Text color={ACCENT} backgroundColor={PROMPT_BACKGROUND}>{BAR}</Text>
           </Box>
         </Box>
         <Box

@@ -52,7 +52,7 @@ test('composer prompt is re-drawn padded like a reply; other user rows pass thro
     expect(JSON.stringify(tree)).toContain('hi there')
     expect(JSON.stringify(tree)).toContain('userMessageBackground')
     expect(JSON.stringify(tree)).toContain('"paddingY":1')
-    expect(JSON.stringify(tree)).toContain('▕')
+    expect(JSON.stringify(tree)).toContain('▍')
     expect(JSON.stringify(tree)).not.toContain('ENGINE')
     const other = await $.ui.mount({
       plugin: 'calm-ui', surface, component: 'UserMessage',
