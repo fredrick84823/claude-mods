@@ -1,15 +1,18 @@
 import type { Register } from 'claude-code'
 import {
-  ANSI_PALETTE,
-  ansiLineOf,
+  TEXT_PALETTE,
   fitLines,
   inlineTextOf,
   leftToRightOf,
   mermaidBlocksOf,
+  partsOf,
   pickLayout,
+  plainOf,
   renderOf,
   withoutPseudoStates,
+  type MermaidBlock,
   type Rendered,
+  type Segment,
 } from './diagrams.ts'
 
 // Every ```mermaid block Claude writes is drawn as box art where the fence
@@ -20,6 +23,10 @@ const COMMAND = 'mermaid'
 const PREFS_KEY = 'prefs'
 // the transcript's code block has a gutter and margins the art must clear
 const INLINE_MARGIN = 6
+// a tree of our own sits behind the reply's two-column gutter alone
+const TREE_MARGIN = 3
+// the glyph the transcript opens a reply with; drawn by the tree, which stands in for the whole block
+const BULLET = '\u23fa'
 
 type Prefs = { ascii: boolean; color: boolean; lr: boolean }
 const DEFAULT_PREFS: Prefs = { ascii: false, color: true, lr: true }
@@ -67,21 +74,53 @@ export const register: Register = on => {
     return r
   })
 
+  // Colours cannot ride on a rewritten `props.text`: since Claude Code 2.1.287
+  // the engine refuses a rewrite holding an escape sequence and skips the hook,
+  // leaving the raw fence. So with colour on, the hook returns a tree of its
+  // own instead (`Markdown` for the prose, one `Text` per diagram line with
+  // the colours as props); otherwise it rewrites the text to plain art as before.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const blocks = mermaidBlocksOf(e.props.text)
     if (blocks.length === 0) return next(e)
-    const columns = (e.viewport?.columns ?? 80) - INLINE_MARGIN
-    // colours ride on ANSI escapes in the drawn code block; only the terminal reads them
-    const palette = prefs.color && e.surface === 'terminal' ? ANSI_PALETTE : null
-    const text = inlineTextOf(e.props.text, blocks, block => {
-      const room = columns - block.indent.length
+    const artOf = (margin: number) => (block: MermaidBlock): Segment[][] | null => {
+      const room = (e.viewport?.columns ?? 80) - margin - block.indent.length
       const art = drawn(block.source, room)
       if (!('lines' in art)) return null
       const fit = fitLines(art.lines, room)
-      const lines = fit.lines.map(line => ansiLineOf(line, palette))
-      if (fit.overflow > 0) lines.push(ansiLineOf([{ text: `… ${fit.overflow} columns cut · widen the terminal`, role: 'line' }], palette))
+      const lines = fit.lines.map(line => [...line])
+      if (fit.overflow > 0) lines.push([{ text: `… ${fit.overflow} columns cut · widen the terminal`, role: 'line' }])
       return lines
-    })
+    }
+
+    if (prefs.color && e.surface === 'terminal') {
+      const parts = partsOf(e.props.text, blocks, artOf(TREE_MARGIN))
+      if (parts) {
+        const { Box, Text, Markdown } = $.ui.resolve(e)
+        const spanOf = (segment: Segment) => {
+          const style = segment.role ? TEXT_PALETTE[segment.role] : {}
+          return style.color || style.dimColor ? Text({ ...style, children: segment.text }) : segment.text
+        }
+        const body = parts.map(part =>
+          part.kind === 'markdown'
+            ? Markdown({ text: part.text })
+            : Box({
+                flexDirection: 'column',
+                marginY: 1,
+                children: part.lines.map(line => Text({ children: [part.indent, ...line.map(spanOf)] })),
+              }),
+        )
+        return Box({
+          flexDirection: 'row',
+          children: [
+            Text({ children: e.props.isFirstOfReply ? `${BULLET} ` : '  ' }),
+            Box({ flexDirection: 'column', flexGrow: 1, children: body }),
+          ],
+        })
+      }
+    }
+
+    const plain = artOf(INLINE_MARGIN)
+    const text = inlineTextOf(e.props.text, blocks, block => plain(block)?.map(plainOf) ?? null)
     return next({ ...e, props: { ...e.props, text } })
   })
 

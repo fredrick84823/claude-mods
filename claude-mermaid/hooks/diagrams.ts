@@ -247,3 +247,59 @@ export const inlineTextOf = (
   }
   return out + text.slice(cursor)
 }
+
+/** `Text` props per role: the terminal's own 16-colour names, so the theme decides the shades */
+export type TextStyle = { color?: string; dimColor?: boolean }
+export const TEXT_PALETTE: Readonly<Record<Role, TextStyle>> = {
+  text: {},
+  border: { color: 'cyan' },
+  line: { dimColor: true },
+  arrow: { color: 'yellow' },
+  corner: { dimColor: true },
+  junction: { color: 'cyan' },
+  accent: { color: 'magenta' },
+}
+
+/** what one `Markdown` element may hold (the engine's cap) */
+export const MAX_MARKDOWN_CHARS = 10_000
+
+/** one piece of a reply drawn as a tree: prose for a `Markdown`, or a diagram's lines for coloured `Text` */
+export type Part = { kind: 'markdown'; text: string } | { kind: 'art'; indent: string; lines: Segment[][] }
+
+// the message split into prose and drawn diagrams, for a tree the engine
+// draws itself: colours ride on `Text` props there, not on escapes, which a
+// rewritten `props.text` may not carry. A block that fails to render stays in
+// the prose as its fence. Null when nothing drew, or a run of prose is longer
+// than one `Markdown` may hold: the caller falls back to the plain rewrite
+export const partsOf = (
+  text: string,
+  blocks: readonly MermaidBlock[],
+  artOf: (block: MermaidBlock) => Segment[][] | null,
+): Part[] | null => {
+  const parts: Part[] = []
+  let prose = ''
+  let drew = false
+  const flush = () => {
+    const trimmed = prose.replace(/^\n+|\n+$/g, '')
+    if (trimmed !== '') parts.push({ kind: 'markdown', text: trimmed })
+    prose = ''
+  }
+  let cursor = 0
+  for (const block of blocks) {
+    const art = artOf(block)
+    prose += text.slice(cursor, block.start)
+    if (art) {
+      flush()
+      parts.push({ kind: 'art', indent: block.indent, lines: art })
+      drew = true
+    } else {
+      prose += text.slice(block.start, block.end)
+    }
+    cursor = block.end
+  }
+  prose += text.slice(cursor)
+  flush()
+  if (!drew) return null
+  if (parts.some(part => part.kind === 'markdown' && part.text.length > MAX_MARKDOWN_CHARS)) return null
+  return parts
+}

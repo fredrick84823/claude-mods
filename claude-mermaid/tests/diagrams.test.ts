@@ -8,8 +8,10 @@ import {
   leftToRightOf,
   pickLayout,
   mermaidBlocksOf,
+  partsOf,
   plainOf,
   renderOf,
+  TEXT_PALETTE,
   widthOf,
   withoutPseudoStates,
   type Segment,
@@ -279,5 +281,49 @@ describe('pickLayout', () => {
     const [base] = both(td)
     expect(pickLayout(base, { error: 'x' }, 100)).toBe(base)
     expect(pickLayout({ error: 'x' }, base, 100)).toEqual({ error: 'x' })
+  })
+})
+
+describe('partsOf', () => {
+  const art = () => [[seg('┌─┐', 'border')], [seg('│A│', 'text')]]
+
+  test('splits prose around a drawn block and trims the blank lines beside it', () => {
+    const text = 'Before.\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\nAfter.'
+    const parts = partsOf(text, mermaidBlocksOf(text), art)
+    expect(parts).toEqual([
+      { kind: 'markdown', text: 'Before.' },
+      { kind: 'art', indent: '', lines: art() },
+      { kind: 'markdown', text: 'After.' },
+    ])
+  })
+
+  test('a block that does not draw stays in the prose as its fence', () => {
+    const text = 'Before.\n\n```mermaid\npie\n  "a": 1\n```\n\n```mermaid\nflowchart LR\n  A --> B\n```'
+    const blocks = mermaidBlocksOf(text)
+    const parts = partsOf(text, blocks, block => (block.source.startsWith('pie') ? null : art()))
+    expect(parts).toEqual([
+      { kind: 'markdown', text: 'Before.\n\n```mermaid\npie\n  "a": 1\n```' },
+      { kind: 'art', indent: '', lines: art() },
+    ])
+  })
+
+  test('null when nothing drew, or a run of prose is longer than one Markdown may hold', () => {
+    const text = 'Before.\n\n```mermaid\nflowchart LR\n  A --> B\n```'
+    expect(partsOf(text, mermaidBlocksOf(text), () => null)).toBeNull()
+    const long = 'x'.repeat(10_001) + '\n\n```mermaid\nflowchart LR\n  A --> B\n```'
+    expect(partsOf(long, mermaidBlocksOf(long), art)).toBeNull()
+  })
+
+  test('keeps the indentation of a fence inside a list item', () => {
+    const text = '- item\n\n  ```mermaid\n  flowchart LR\n    A --> B\n  ```\n'
+    const parts = partsOf(text, mermaidBlocksOf(text), art)
+    expect(parts?.[1]).toMatchObject({ kind: 'art', indent: '  ' })
+  })
+
+  test('the text palette names 16-colour names and dim only, no escapes', () => {
+    for (const style of Object.values(TEXT_PALETTE)) {
+      expect(JSON.stringify(style)).not.toContain('\u001b')
+      if (style.color) expect(['cyan', 'yellow', 'magenta']).toContain(style.color)
+    }
   })
 })

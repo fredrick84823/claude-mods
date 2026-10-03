@@ -78,9 +78,12 @@ plugin's store across sessions.
 ## How it works
 
 - `hooks/register.ts` is the hooks module. It hooks `ui.render` of
-  `AssistantMessage` to swap each closed mermaid fence for a text fence of its
-  art (ANSI-coloured, so the transcript's code block draws the colours), and
-  `command.run` for `/mermaid`.
+  `AssistantMessage`: with colour on, on the terminal, it returns a tree of its
+  own (`Markdown` for the prose, one `Text` per diagram line, the colours as
+  props on its spans), since a rewritten `props.text` may carry no escape
+  sequence from Claude Code 2.1.287 on; otherwise it swaps each closed mermaid
+  fence for a text fence of plain art. It also hooks `command.run` for
+  `/mermaid`.
 - `hooks/diagrams.ts` is the pure part: finding fences, rendering, choosing
   the sideways layout (kept only when every word of the top-down render
   survives, since the renderer can overwrite the label of an edge that runs
@@ -135,8 +138,9 @@ Claude with `--debug-file /tmp/mermaid.log` to see what the engine refused.
   journey, timeline, quadrant, C4, …) keep their fence.
 - Art wider than the transcript is cut at the right with `…` and a line
   saying by how much; make the terminal wider.
-- Colours ride on ANSI escapes inside the drawn code block; a surface that
-  strips them (desktop, mobile) shows plain art.
+- Colours are drawn on the terminal alone; desktop, VS Code and mobile show
+  plain art. A reply whose prose between diagrams runs past 10000 characters
+  (one `Markdown` element's cap) is drawn plain too.
 
 ## License
 
