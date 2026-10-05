@@ -137,7 +137,7 @@ const startProxy = async (target: string) => {
 export type SessionOptions = {
   columns?: number
   rows?: number
-  /** the plugin folder to load; this repository (claude-mermaid) by default */
+  /** the plugin folder to load; this repository (mermaid-draw) by default */
   pluginDir?: string
   /** the session's working directory; the repository by default */
   cwd?: string

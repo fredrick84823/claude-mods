@@ -2,7 +2,7 @@ import { test, expect } from 'claude-code/testing'
 
 // The engine's own drawing of an assistant block stands in for the bottom of
 // the chain here: the kit needs one, and the plugin's tree replaces it.
-const PLUGIN = 'claude-mermaid'
+const PLUGIN = 'mermaid-draw'
 const REPLY = 'A prompt flows to a reply.\n\n```mermaid\nflowchart LR\n  A[Prompt] --> B[Reply]\n```\n\nThat is all.'
 const VIEWPORT = { columns: 100, rows: 40 }
 

@@ -66,7 +66,7 @@ export const register: Register = on => {
     await $.command
       .register({
         name: COMMAND,
-        description: 'Mermaid diagrams drawn in the transcript: ascii|color|lr on|off, reset (claude-mermaid)',
+        description: 'Mermaid diagrams drawn in the transcript: ascii|color|lr on|off, reset (mermaid-draw)',
         argumentHint: '[ascii|color|lr on|off | reset]',
         immediate: true,
       })

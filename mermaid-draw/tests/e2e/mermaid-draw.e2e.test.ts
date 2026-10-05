@@ -39,7 +39,7 @@ const ready = hasTmux() && hasClaude()
 // a turn through aimock plus the redraw; well past bun's 5s default
 const TURN_MS = 40_000
 
-describe.skipIf(!ready)('claude-mermaid in Claude Code', () => {
+describe.skipIf(!ready)('mermaid-draw in Claude Code', () => {
   let s: Session
 
   beforeAll(async () => {
@@ -166,7 +166,7 @@ describe.skipIf(!ready)('claude-mermaid in Claude Code', () => {
   }, TURN_MS)
 })
 
-describe.skipIf(!ready)('claude-mermaid in a narrow terminal', () => {
+describe.skipIf(!ready)('mermaid-draw in a narrow terminal', () => {
   let s: Session
 
   beforeAll(async () => {
