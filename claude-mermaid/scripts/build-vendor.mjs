@@ -5,7 +5,9 @@ import { build } from 'esbuild'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const entry = 'scripts/vendor-entry.ts'
-writeFileSync(entry, `export { renderMermaidAscii } from '../node_modules/beautiful-mermaid/src/ascii/index.ts'\n`)
+// displayWidth comes along so fitting the art to the terminal measures CJK as two columns, as the renderer does
+writeFileSync(entry, `export { renderMermaidAscii } from '../node_modules/beautiful-mermaid/src/ascii/index.ts'
+export { displayWidth } from '../node_modules/beautiful-mermaid/src/text-metrics.ts'\n`)
 
 // Upstream's A* searches an unbounded quadrant, so an edge whose target is
 // fenced in expands cells for ~20s and dies on "Map maximum size exceeded";

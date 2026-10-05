@@ -1,0 +1,1258 @@
+From fb004371c3f31237e3f05f9e482cf9b97719f723 Mon Sep 17 00:00:00 2001
+From: chan1103 <241870013+chan1103@users.noreply.github.com>
+Date: Fri, 12 Jun 2026 23:03:00 +0900
+Subject: [PATCH 1/2] fix: align ASCII box borders around fullwidth (CJK/emoji)
+ labels
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The ASCII renderer measured labels with string.length (UTF-16 code
+units) and wrote one char per canvas cell, but terminals render East
+Asian characters (CJK ideographs, Hangul, kana, fullwidth forms) and
+emoji 2 columns wide. Any label containing them broke box borders, arrow
+paths, and centering (issues #119, #122; see also prior PRs #50, #99).
+
+Approach: keep the cell-per-column grid, but store a 2-column grapheme
+as its full cluster in one cell followed by a WIDE_PAD continuation
+cell, so cell count == display columns everywhere. Serializers drop
+WIDE_PAD when joining rows.
+
+- text-metrics.ts: new displayWidth()/toCells() measured over grapheme
+  clusters (Intl.Segmenter, zero new dependencies), reusing the existing
+  East Asian fullwidth ranges. Width is the cluster's base-scalar width
+  so emoji modifier/ZWJ/flag sequences are one 2-column glyph (👍🏽, 👨‍👩‍👧,
+  🇰🇷 = 2, not 4/6); VS16 upgrades a text-presentation base to emoji
+  width; text-presentation symbols the renderer draws as 1-cell glyphs
+  (the arrowheads ◀▶, ◇, △) stay narrow; combining marks are zero-width.
+- canvas.ts: drawText()/mergeCanvases() write wide glyph+pad pairs
+  atomically and dissolve any pair a write would split, so label
+  collisions can never change a row's display width; first-label-wins
+  covers letters/digits and any 2-column glyph (so emoji labels are not
+  clobbered by a colliding narrow label); canvasToString() strips pads
+  in plain and colored paths.
+- All width math (box sizing, centering, gutters, legends, edge-label
+  segment selection) measures display columns across flowchart/state,
+  sequence, class, ER, xychart; clamped label writes keep pairs atomic.
+
+Tests: 711 existing pass unchanged (pure-ASCII output is byte-identical
+via the ASCII fast path); 23 new in ascii-cjk-width.test.ts pin the
+width policy (CJK, narrow symbols, ZWJ/VS16/flag/skin-tone/family/
+keycap), display-column border alignment for flowchart/sequence/class/
+ER/state, the flag-emoji case, label-collision row-width invariance,
+emoji-label collision survival, colored-output parity, and no pad leak.
+
+Fixes #119, fixes #122
+---
+ src/__tests__/ascii-cjk-width.test.ts | 258 ++++++++++++++++++++++++++
+ src/ascii/canvas.ts                   |  89 ++++++---
+ src/ascii/class-diagram.ts            |  14 +-
+ src/ascii/draw.ts                     |  33 ++--
+ src/ascii/edge-routing.ts             |   3 +-
+ src/ascii/er-diagram.ts               |  28 +--
+ src/ascii/multiline-utils.ts          |   5 +-
+ src/ascii/sequence.ts                 |  61 +++---
+ src/ascii/shapes/rectangle.ts         |  10 +-
+ src/ascii/shapes/special.ts           |  19 +-
+ src/ascii/shapes/stadium.ts           |  10 +-
+ src/ascii/xychart.ts                  |  42 +++--
+ src/text-metrics.ts                   |  97 ++++++++++
+ 13 files changed, 558 insertions(+), 111 deletions(-)
+ create mode 100644 src/__tests__/ascii-cjk-width.test.ts
+
+diff --git a/src/__tests__/ascii-cjk-width.test.ts b/src/__tests__/ascii-cjk-width.test.ts
+new file mode 100644
+index 0000000..d3fc84f
+--- /dev/null
++++ b/src/__tests__/ascii-cjk-width.test.ts
+@@ -0,0 +1,258 @@
++import { describe, it, expect } from 'bun:test'
++import { renderMermaidAscii } from '../ascii/index.ts'
++import { mkCanvas, drawText, mergeCanvases, canvasToString } from '../ascii/canvas.ts'
++import { displayWidth, toCells, WIDE_PAD } from '../text-metrics.ts'
++
++/**
++ * Display column of character index `idx` within `line` — i.e. how many
++ * terminal columns precede it. This is what a monospace terminal uses to
++ * align glyphs, so box borders must agree on it across rows.
++ */
++function displayCol(line: string, idx: number): number {
++  return displayWidth(line.slice(0, idx))
++}
++
++/**
++ * Assert that the first box in the output is rectangular in display columns:
++ * its top corners define a left/right column, every in-box row that carries
++ * vertical borders has borders exactly at those columns, and the bottom
++ * corners land on them too. Tolerates sibling boxes on the same rows (only
++ * requires the expected columns to be present among the border positions)
++ * and divider/junction rows (skipped — they carry no vertical border char).
++ * Returns the number of rows whose borders were verified.
++ */
++function expectAlignedBox(output: string, topLeft: string, topRight: string, vertical: string): number {
++  const lines = output.split('\n')
++  const topIdx = lines.findIndex(l => l.includes(topLeft) && l.includes(topRight))
++  expect(topIdx).toBeGreaterThanOrEqual(0)
++  const top = lines[topIdx]!
++  const leftCol = displayCol(top, top.indexOf(topLeft))
++  const rightCol = displayCol(top, top.indexOf(topRight))
++
++  // Find the bottom border row: the next row whose characters at the
++  // expected columns are box-closing corners or junctions.
++  const bottomChars = new Set(['└', '┘', '╰', '╯', '╚', '╝', '┴', "'", '+', '#'])
++  let checked = 0
++  for (let i = topIdx + 1; i < lines.length; i++) {
++    const line = lines[i]!
++    const cols = new Map<number, string>()
++    let col = 0
++    // Segment by grapheme (not code point) so the column model matches the
++    // renderer's: a flag like 🇨🇳 is one 2-column glyph, not two.
++    for (const { segment } of new Intl.Segmenter().segment(line)) {
++      cols.set(col, segment)
++      col += displayWidth(segment)
++    }
++    const atLeft = cols.get(leftCol)
++    const atRight = cols.get(rightCol)
++    if (atLeft !== undefined && bottomChars.has(atLeft)) {
++      // Bottom border: both corners must close at the expected columns
++      expect(atRight !== undefined && bottomChars.has(atRight)).toBe(true)
++      checked++
++      break
++    }
++    if (line.includes(vertical)) {
++      expect(atLeft).toBe(vertical)
++      expect(atRight).toBe(vertical)
++      checked++
++    }
++  }
++  return checked
++}
++
++describe('CJK display width utilities', () => {
++  it('counts fullwidth characters as 2 columns', () => {
++    expect(displayWidth('AB')).toBe(2)
++    expect(displayWidth('한글')).toBe(4)
++    expect(displayWidth('수집 스케줄러')).toBe(13)
++    expect(displayWidth('日本語テスト')).toBe(12)
++    expect(displayWidth('中文')).toBe(4)
++    expect(displayWidth('mixed 한글 text')).toBe(15)
++    expect(displayWidth('')).toBe(0)
++  })
++
++  it('counts emoji-presentation scalars as 2 columns', () => {
++    expect(displayWidth('🚀')).toBe(2)
++    expect(displayWidth('A🚀B')).toBe(4)
++    expect(displayWidth('⌚')).toBe(2)
++  })
++
++  it('keeps text-presentation symbols used by the renderer at 1 column', () => {
++    // The renderer itself places these as single-cell arrowheads/markers
++    for (const ch of ['◀', '▶', '◁', '▷', '△', '▲', '▼', '◆', '◇', '½', '·']) {
++      expect(displayWidth(ch)).toBe(1)
++    }
++  })
++
++  it('measures grapheme clusters, not code points', () => {
++    expect(displayWidth('👩‍💻')).toBe(2) // ZWJ sequence
++    expect(displayWidth('👨‍👩‍👧')).toBe(2) // multi-ZWJ family
++    expect(displayWidth('🇰🇷')).toBe(2) // regional-indicator flag
++    expect(displayWidth('👍🏽')).toBe(2) // base + skin-tone modifier (one glyph)
++    expect(displayWidth('🏳️‍🌈')).toBe(2) // flag + VS16 + ZWJ + rainbow
++    expect(displayWidth('✈️')).toBe(2) // VS16 forces emoji presentation
++    expect(displayWidth('❤️')).toBe(2)
++    expect(displayWidth('1️⃣')).toBe(2) // keycap sequence
++    expect(displayWidth('e\u0301')).toBe(1) // combining acute mark
++  })
++
++  it('upgrades text-presentation symbols to 2 columns only with VS16', () => {
++    // Default presentation is text (1 col); VS16 requests emoji (2 cols).
++    expect(displayWidth('⚠')).toBe(1)
++    expect(displayWidth('⚠️')).toBe(2)
++    expect(displayWidth('©')).toBe(1)
++    expect(displayWidth('©️')).toBe(2)
++  })
++
++  it('expands wide glyphs into glyph + pad cells', () => {
++    expect(toCells('AB')).toEqual(['A', 'B'])
++    expect(toCells('한글')).toEqual(['한', WIDE_PAD, '글', WIDE_PAD])
++    expect(toCells('A한B')).toEqual(['A', '한', WIDE_PAD, 'B'])
++    expect(toCells('👩‍💻')).toEqual(['👩‍💻', WIDE_PAD])
++    expect(toCells('e\u0301')).toEqual(['e\u0301'])
++  })
++})
++
++describe('CJK box border alignment', () => {
++  it('aligns flowchart node borders around Hangul labels', () => {
++    const out = renderMermaidAscii('graph TD\n  A[수집 스케줄러]', { useAscii: false })
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++
++  it('aligns flowchart node borders around mixed-width labels', () => {
++    const out = renderMermaidAscii('graph TD\n  A[릴리즈 ingest 단계]', { useAscii: false })
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++
++  it('aligns connected CJK nodes and keeps edge label', () => {
++    const out = renderMermaidAscii('graph TD\n  A[수집기] -->|매시간| B[저장소]', { useAscii: false })
++    expect(out).toContain('매시간')
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++
++  it('aligns multi-line CJK node labels', () => {
++    const out = renderMermaidAscii('graph TD\n  A[첫째 줄<br>둘째 줄이 더 길다]', { useAscii: false })
++    expect(out).toContain('첫째 줄')
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++
++  it('aligns sequence actor boxes with Hangul labels', () => {
++    const out = renderMermaidAscii(
++      'sequenceDiagram\n  participant U as 방문자\n  participant W as 웹사이트\n  U->>W: 페이지 요청',
++      { useAscii: false },
++    )
++    expect(out).toContain('페이지 요청')
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++
++  it('aligns class diagram boxes with Hangul members', () => {
++    const out = renderMermaidAscii(
++      'classDiagram\n  class 동물 {\n    +이름 string\n  }',
++      { useAscii: false },
++    )
++    expect(out).toContain('동물')
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++
++  it('aligns ER entity boxes with Hangul names', () => {
++    const out = renderMermaidAscii('erDiagram\n  회원 ||--o{ 주문 : 생성', { useAscii: false })
++    expect(out).toContain('생성')
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++
++  it('centers xychart CJK title within total width', () => {
++    const out = renderMermaidAscii(
++      'xychart-beta\n  title "월별 방문자"\n  x-axis [1월, 2월]\n  y-axis "명" 0 --> 10\n  bar [3, 7]',
++      { useAscii: false },
++    )
++    expect(out).toContain('월별 방문자')
++  })
++
++  it('aligns state diagram boxes with Hangul labels', () => {
++    const out = renderMermaidAscii('stateDiagram-v2\n  [*] --> 대기\n  대기 --> 처리중: 시작', { useAscii: false })
++    expect(out).toContain('처리중')
++    expect(expectAlignedBox(out, '╭', '╮', '│')).toBeGreaterThan(0)
++  })
++
++  it('aligns boxes for flag + CJK labels (compound emoji)', () => {
++    // Regression for the regional-indicator case competing fixes miss:
++    // 🇨🇳 is one 2-column glyph, not two 1-column code points.
++    const out = renderMermaidAscii('graph TD\n  A[🇨🇳 中文文章] --> B[🇬🇧 英文文章]', { useAscii: false })
++    expect(out).toContain('🇨🇳 中文文章')
++    expect(expectAlignedBox(out, '┌', '┐', '│')).toBeGreaterThan(0)
++  })
++})
++
++describe('wide-glyph continuation cells', () => {
++  it('never leaks the pad placeholder into output', () => {
++    const sources = [
++      'graph TD\n  A[한글] --> B[테스트]',
++      'graph TD\n  A[🇨🇳 中文] --> B[👍🏽 OK]',
++      'sequenceDiagram\n  A->>B: 한글 메시지',
++      'classDiagram\n  class 클래스',
++      'erDiagram\n  고객 ||--o{ 주문 : 한다',
++      'stateDiagram-v2\n  [*] --> 대기',
++      'xychart-beta\n  title "월별"\n  x-axis [일월, 이월]\n  y-axis "명" 0 --> 10\n  bar [3, 7]',
++    ]
++    for (const src of sources) {
++      const out = renderMermaidAscii(src, { useAscii: false })
++      expect(out).not.toContain(WIDE_PAD)
++    }
++  })
++
++  it('keeps pure-ASCII output identical in width semantics', () => {
++    const out = renderMermaidAscii('graph TD\n  A[Plain] --> B[Labels]', { useAscii: false })
++    for (const line of out.split('\n')) {
++      expect(displayWidth(line)).toBe(line.length)
++    }
++  })
++
++  it('keeps row widths uniform when labels collide on a merge', () => {
++    // Two edge labels between the same nodes force a label collision;
++    // a split wide-glyph pair would make row 3 narrower or wider.
++    const out = renderMermaidAscii('graph LR\n  A[A] -->|한글| B[B]\n  A -->|X| B', { useAscii: false })
++    const widths = new Set(out.split('\n').map(l => displayWidth(l)))
++    expect(widths.size).toBe(1)
++  })
++
++  it('keeps row widths uniform for narrow-symbol + emoji edge labels', () => {
++    const out = renderMermaidAscii('graph LR\n  A[Start] -->|go ▶ 🚀| B[Done]', { useAscii: false })
++    const widths = new Set(out.split('\n').map(l => displayWidth(l)))
++    expect(widths.size).toBe(1)
++  })
++
++  it('keeps row widths uniform for ZWJ emoji node labels', () => {
++    const out = renderMermaidAscii('graph TD\n  A[Dev 👩‍💻] --> B[OK]', { useAscii: false })
++    const widths = new Set(out.split('\n').map(l => displayWidth(l)))
++    expect(widths.size).toBe(1)
++  })
++
++  it('mergeCanvases keeps an existing emoji label when a narrow label collides', () => {
++    // first-label-wins must cover emoji: a width-2 emoji lead is label content,
++    // so a later narrow label colliding on its cell must not overwrite it.
++    // (Fails on the pre-fix isLabelChar, which only protected letters/digits.)
++    const base = mkCanvas(0, 0)
++    drawText(base, { x: 0, y: 0 }, '🚀') // emoji label placed first
++    const overlay = mkCanvas(0, 0)
++    drawText(overlay, { x: 0, y: 0 }, 'X') // later narrow label on the same cell
++    const merged = canvasToString(mergeCanvases(base, { x: 0, y: 0 }, false, overlay))
++    expect(merged).toContain('🚀')
++    expect(merged).not.toContain('X')
++  })
++
++  it('keeps colored output aligned for CJK labels', () => {
++    const colored = renderMermaidAscii('graph TD\n  A[한글 라벨] --> B[OK]', {
++      useAscii: false,
++      colorMode: 'truecolor',
++    })
++    expect(colored).not.toContain(WIDE_PAD)
++    // Strip ANSI escapes; the visible rows must match the plain rendering
++    const plain = renderMermaidAscii('graph TD\n  A[한글 라벨] --> B[OK]', {
++      useAscii: false,
++      colorMode: 'none',
++    })
++    // eslint-disable-next-line no-control-regex
++    const stripped = colored.replace(/\x1b\[[0-9;]*m/g, '')
++    expect(stripped).toBe(plain)
++  })
++})
+diff --git a/src/ascii/canvas.ts b/src/ascii/canvas.ts
+index e9949fe..22a0031 100644
+--- a/src/ascii/canvas.ts
++++ b/src/ascii/canvas.ts
+@@ -8,6 +8,7 @@
+ 
+ import type { Canvas, DrawingCoord, RoleCanvas, CharRole, AsciiTheme, ColorMode } from './types.ts'
+ import { colorizeLine, DEFAULT_ASCII_THEME } from './ansi.ts'
++import { displayWidth, toCells, WIDE_PAD } from '../text-metrics.ts'
+ 
+ /**
+  * Create a blank canvas filled with spaces.
+@@ -178,9 +179,33 @@ export function isJunctionChar(c: string): boolean {
+   return JUNCTION_CHARS.has(c)
+ }
+ 
+-/** Check if a character is alphanumeric (part of a label). */
+-function isAlphanumeric(c: string): boolean {
+-  return /^[a-zA-Z0-9]$/.test(c)
++/**
++ * Check if a cell holds label content for first-label-wins collision
++ * handling during merges: letters/digits in any script, the continuation
++ * cell of a wide glyph, or any 2-column glyph. Wide glyphs are only ever
++ * produced by labels (CJK ideographs, Hangul, emoji) — the renderer's own
++ * structural glyphs (borders, the narrow arrowheads ◀▶) are 1 column — so
++ * width 2 is a sufficient signal for emoji labels (🚀, 🇨🇳, 👍🏽) that the
++ * letter/digit test misses.
++ */
++function isLabelChar(c: string): boolean {
++  return c === WIDE_PAD || displayWidth(c) === 2 || /[\p{L}\p{N}]/u.test(c)
++}
++
++/**
++ * Write one cell, dissolving any wide-glyph pair the write would split:
++ * overwriting a WIDE_PAD orphans its lead, and overwriting a lead orphans
++ * its pad — the orphaned half becomes a space so serialized rows keep
++ * exactly one column per cell.
++ */
++function writeCell(canvas: Canvas, x: number, y: number, c: string): void {
++  const current = canvas[x]![y]!
++  if (current === WIDE_PAD && x > 0 && c !== WIDE_PAD) {
++    canvas[x - 1]![y] = ' '
++  } else if (current !== WIDE_PAD && canvas[x + 1]?.[y] === WIDE_PAD && c !== current) {
++    canvas[x + 1]![y] = ' '
++  }
++  canvas[x]![y] = c
+ }
+ 
+ /**
+@@ -243,18 +268,25 @@ export function mergeCanvases(
+     for (let x = 0; x < overlay.length; x++) {
+       for (let y = 0; y < overlay[0]!.length; y++) {
+         const c = overlay[x]![y]!
+-        if (c !== ' ') {
+-          const mx = x + offset.x
+-          const my = y + offset.y
+-          const current = merged[mx]![my]!
+-          if (!useAscii && isJunctionChar(c) && isJunctionChar(current)) {
+-            merged[mx]![my] = mergeJunctions(current, c)
+-          } else if (isAlphanumeric(current) && isAlphanumeric(c)) {
+-            // Don't overwrite existing label text with new label text
+-            // This prevents label collisions (first label wins)
+-          } else {
+-            merged[mx]![my] = c
++        // WIDE_PAD cells are written atomically with their lead below
++        if (c === ' ' || c === WIDE_PAD) continue
++        const mx = x + offset.x
++        const my = y + offset.y
++        const current = merged[mx]![my]!
++        const isWide = overlay[x + 1]?.[y] === WIDE_PAD
++        if (!useAscii && isJunctionChar(c) && isJunctionChar(current)) {
++          merged[mx]![my] = mergeJunctions(current, c)
++        } else if (isWide) {
++          // Wide glyphs land or yield as a whole pair (first label wins)
++          if (!isLabelChar(current) && !isLabelChar(merged[mx + 1]?.[my] ?? ' ')) {
++            writeCell(merged, mx, my, c)
++            writeCell(merged, mx + 1, my, WIDE_PAD)
+           }
++        } else if (isLabelChar(current) && isLabelChar(c)) {
++          // Don't overwrite existing label text with new label text
++          // This prevents label collisions (first label wins)
++        } else {
++          writeCell(merged, mx, my, c)
+         }
+       }
+     }
+@@ -294,7 +326,9 @@ export function canvasToString(canvas: Canvas, options?: CanvasToStringOptions):
+       // Plain text output — no colors
+       let line = ''
+       for (let x = 0; x <= maxX; x++) {
+-        line += canvas[x]![y]!
++        const c = canvas[x]![y]!
++        // Skip wide-glyph continuation cells: the glyph itself spans 2 columns
++        if (c !== WIDE_PAD) line += c
+       }
+       lines.push(line)
+     } else {
+@@ -302,7 +336,9 @@ export function canvasToString(canvas: Canvas, options?: CanvasToStringOptions):
+       const chars: string[] = []
+       const roles: (CharRole | null)[] = []
+       for (let x = 0; x <= maxX; x++) {
+-        chars.push(canvas[x]![y]!)
++        const c = canvas[x]![y]!
++        if (c === WIDE_PAD) continue
++        chars.push(c)
+         roles.push(roleCanvas[x]?.[y] ?? null)
+       }
+       lines.push(colorizeLine(chars, roles, theme, colorMode))
+@@ -387,13 +423,22 @@ export function drawText(
+   text: string,
+   forceOverwrite = false
+ ): void {
+-  increaseSize(canvas, start.x + text.length, start.y)
+-  for (let i = 0; i < text.length; i++) {
++  const cells = toCells(text)
++  increaseSize(canvas, start.x + cells.length, start.y)
++  for (let i = 0; i < cells.length; i++) {
++    const cell = cells[i]!
++    // WIDE_PAD cells are written atomically with their lead below
++    if (cell === WIDE_PAD) continue
+     const x = start.x + i
+-    const current = canvas[x]![start.y]!
+-    // Only write if target is empty or we're forcing overwrite
+-    if (forceOverwrite || current === ' ') {
+-      canvas[x]![start.y] = text[i]!
++    if (cells[i + 1] === WIDE_PAD) {
++      // Wide glyph: needs both its cells free (or forced) to land
++      const pairFree = canvas[x]![start.y] === ' ' && canvas[x + 1]![start.y] === ' '
++      if (forceOverwrite || pairFree) {
++        writeCell(canvas, x, start.y, cell)
++        writeCell(canvas, x + 1, start.y, WIDE_PAD)
++      }
++    } else if (forceOverwrite || canvas[x]![start.y] === ' ') {
++      writeCell(canvas, x, start.y, cell)
+     }
+   }
+ }
+diff --git a/src/ascii/class-diagram.ts b/src/ascii/class-diagram.ts
+index 95e2c76..cdf20cd 100644
+--- a/src/ascii/class-diagram.ts
++++ b/src/ascii/class-diagram.ts
+@@ -16,6 +16,7 @@ import type { Canvas, AsciiConfig, RoleCanvas, CharRole, AsciiTheme, ColorMode }
+ import { mkCanvas, mkRoleCanvas, canvasToString, increaseSize, increaseRoleCanvasSize, setRole } from './canvas.ts'
+ import { drawMultiBox } from './draw.ts'
+ import { splitLines } from './multiline-utils.ts'
++import { displayWidth, toCells } from '../text-metrics.ts'
+ 
+ /** Classify a character from a box drawing as 'border' or 'text'. */
+ function classifyBoxChar(ch: string): CharRole {
+@@ -170,7 +171,7 @@ export function renderClassAscii(text: string, config: AsciiConfig, colorMode?:
+     // Compute box dimensions from drawMultiBox logic
+     let maxTextW = 0
+     for (const section of sections) {
+-      for (const line of section) maxTextW = Math.max(maxTextW, line.length)
++      for (const line of section) maxTextW = Math.max(maxTextW, displayWidth(line))
+     }
+     const boxW = maxTextW + 4 // 2 border + 2 padding
+ 
+@@ -602,7 +603,7 @@ export function renderClassAscii(text: string, config: AsciiConfig, colorMode?:
+     // Add padding around the label for readability
+     if (rel.label) {
+       const lines = splitLines(rel.label)
+-      const maxLabelWidth = Math.max(...lines.map(l => l.length)) + 2 // +2 for padding
++      const maxLabelWidth = Math.max(...lines.map(l => displayWidth(l))) + 2 // +2 for padding
+ 
+       // Calculate ideal label position based on routing direction
+       let baseMidY: number
+@@ -672,21 +673,22 @@ export function renderClassAscii(text: string, config: AsciiConfig, colorMode?:
+ 
+       for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+         const paddedLine = ` ${lines[lineIdx]!} `  // Add space padding on both sides
++        const cells = toCells(paddedLine)
+         // Calculate label start, but ensure it doesn't go negative
+-        const idealLabelStart = idealMidX - Math.floor(paddedLine.length / 2)
++        const idealLabelStart = idealMidX - Math.floor(cells.length / 2)
+         const labelStart = Math.max(0, idealLabelStart)
+         const y = startY + lineIdx
+         // Ensure canvas is wide enough for the label
+-        const labelEnd = labelStart + paddedLine.length
++        const labelEnd = labelStart + cells.length
+         if (labelEnd > 0 && y >= 0) {
+           increaseSize(canvas, Math.max(labelEnd, 1), Math.max(y + 1, 1))
+           increaseRoleCanvasSize(rc, Math.max(labelEnd, 1), Math.max(y + 1, 1))
+         }
+         // Clear the area first (overwrite line characters) then draw the padded label
+-        for (let i = 0; i < paddedLine.length; i++) {
++        for (let i = 0; i < cells.length; i++) {
+           const lx = labelStart + i
+           if (lx >= 0 && y >= 0) {
+-            setC(lx, y, paddedLine[i]!, 'text')
++            setC(lx, y, cells[i]!, 'text')
+           }
+         }
+       }
+diff --git a/src/ascii/draw.ts b/src/ascii/draw.ts
+index f8020f5..e1e205d 100644
+--- a/src/ascii/draw.ts
++++ b/src/ascii/draw.ts
+@@ -21,6 +21,7 @@ import { gridToDrawingCoord, lineToDrawing } from './grid.ts'
+ import { splitLines } from './multiline-utils.ts'
+ import { getCorners } from './shapes/corners.ts'
+ import { getShapeAttachmentPoint } from './shapes/index.ts'
++import { displayWidth, toCells, WIDE_PAD } from '../text-metrics.ts'
+ 
+ // ============================================================================
+ // Node drawing — renders a node using shape-aware rendering
+@@ -104,10 +105,11 @@ function drawBoxWithGridDimensions(node: AsciiNode, graph: AsciiGraph): Canvas {
+ 
+   for (let i = 0; i < lines.length; i++) {
+     const line = lines[i]!
+-    const textX = from.x + Math.floor(w / 2) - Math.ceil(line.length / 2) + 1
+-    for (let j = 0; j < line.length; j++) {
++    const cells = toCells(line)
++    const textX = from.x + Math.floor(w / 2) - Math.ceil(cells.length / 2) + 1
++    for (let j = 0; j < cells.length; j++) {
+       if (textX + j >= 0 && textX + j < box.length && startY + i >= 0 && startY + i < box[0]!.length) {
+-        box[textX + j]![startY + i] = line[j]!
++        box[textX + j]![startY + i] = cells[j]!
+       }
+     }
+   }
+@@ -147,7 +149,7 @@ export function drawMultiBox(
+   let maxTextWidth = 0
+   for (const section of sections) {
+     for (const line of section) {
+-      maxTextWidth = Math.max(maxTextWidth, line.length)
++      maxTextWidth = Math.max(maxTextWidth, displayWidth(line))
+     }
+   }
+   const innerWidth = maxTextWidth + 2 * padding
+@@ -198,8 +200,9 @@ export function drawMultiBox(
+     // Draw section text lines
+     for (const line of lines) {
+       const startX = 1 + padding
+-      for (let i = 0; i < line.length; i++) {
+-        canvas[startX + i]![row] = line[i]!
++      const cells = toCells(line)
++      for (let i = 0; i < cells.length; i++) {
++        canvas[startX + i]![row] = cells[i]!
+       }
+       row++
+     }
+@@ -673,7 +676,7 @@ function drawTextOnLine(canvas: Canvas, line: DrawingCoord[], label: string, isU
+ 
+   for (let i = 0; i < lines.length; i++) {
+     const lineText = lines[i]!
+-    const startX = middleX - Math.floor(lineText.length / 2)
++    const startX = middleX - Math.floor(displayWidth(lineText) / 2)
+     drawText(canvas, { x: startX, y: startY + i }, lineText)
+   }
+ }
+@@ -1142,13 +1145,19 @@ export function drawSubgraphLabel(sg: AsciiSubgraph, graph: AsciiGraph): [Canvas
+   for (let i = 0; i < lines.length; i++) {
+     const line = lines[i]!
+     const labelY = 1 + i
+-    let labelX = Math.floor(width / 2) - Math.floor(line.length / 2)
++    let labelX = Math.floor(width / 2) - Math.floor(displayWidth(line) / 2)
+     if (labelX < 1) labelX = 1
+ 
+-    for (let j = 0; j < line.length; j++) {
+-      if (labelX + j < width && labelY < height) {
+-        canvas[labelX + j]![labelY] = line[j]!
+-      }
++    const cells = toCells(line)
++    for (let j = 0; j < cells.length; j++) {
++      const cell = cells[j]!
++      if (cell === WIDE_PAD) continue // written atomically with its lead
++      const cx = labelX + j
++      const wide = cells[j + 1] === WIDE_PAD
++      // Keep wide-glyph pairs atomic at the subgraph edge
++      if (cx + (wide ? 1 : 0) >= width || labelY >= height) continue
++      canvas[cx]![labelY] = cell
++      if (wide) canvas[cx + 1]![labelY] = WIDE_PAD
+     }
+   }
+ 
+diff --git a/src/ascii/edge-routing.ts b/src/ascii/edge-routing.ts
+index e9a9dd4..e69234e 100644
+--- a/src/ascii/edge-routing.ts
++++ b/src/ascii/edge-routing.ts
+@@ -13,6 +13,7 @@ import {
+ } from './types.ts'
+ import { getPath, mergePath } from './pathfinder.ts'
+ import { getEffectiveDirection, getNodeSubgraph } from './grid.ts'
++import { displayWidth } from '../text-metrics.ts'
+ 
+ // ============================================================================
+ // Direction utilities
+@@ -227,7 +228,7 @@ export function determinePath(graph: AsciiGraph, edge: AsciiEdge): void {
+ export function determineLabelLine(graph: AsciiGraph, edge: AsciiEdge): void {
+   if (edge.text.length === 0) return
+ 
+-  const lenLabel = edge.text.length
++  const lenLabel = displayWidth(edge.text)
+   const pathLen = edge.path.length
+   const isVerticalFlow = graph.config.graphDirection === 'TD'
+ 
+diff --git a/src/ascii/er-diagram.ts b/src/ascii/er-diagram.ts
+index 7ff86b7..66410d2 100644
+--- a/src/ascii/er-diagram.ts
++++ b/src/ascii/er-diagram.ts
+@@ -15,6 +15,7 @@ import type { Canvas, AsciiConfig, RoleCanvas, CharRole, AsciiTheme, ColorMode }
+ import { mkCanvas, mkRoleCanvas, canvasToString, increaseSize, increaseRoleCanvasSize, setRole } from './canvas.ts'
+ import { drawMultiBox } from './draw.ts'
+ import { splitLines } from './multiline-utils.ts'
++import { displayWidth, toCells, WIDE_PAD } from '../text-metrics.ts'
+ 
+ /** Classify a character from a box drawing as 'border' or 'text'. */
+ function classifyBoxChar(ch: string): CharRole {
+@@ -180,7 +181,7 @@ export function renderErAscii(text: string, config: AsciiConfig, colorMode?: Col
+ 
+     let maxTextW = 0
+     for (const section of sections) {
+-      for (const line of section) maxTextW = Math.max(maxTextW, line.length)
++      for (const line of section) maxTextW = Math.max(maxTextW, displayWidth(line))
+     }
+     const boxW = maxTextW + 4 // 2 border + 2 padding
+ 
+@@ -344,16 +345,21 @@ export function renderErAscii(text: string, config: AsciiConfig, colorMode?: Col
+         // Place lines below the relationship line (lineY + 1, lineY + 2, ...)
+         for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+           const line = lines[lineIdx]!
+-          const labelStart = Math.max(startX, gapMid - Math.floor(line.length / 2))
++          const cells = toCells(line)
++          const labelStart = Math.max(startX, gapMid - Math.floor(cells.length / 2))
+           const labelY = lineY + 1 + lineIdx
+           // Ensure canvas is tall enough
+-          increaseSize(canvas, Math.max(labelStart + line.length, 1), Math.max(labelY + 1, 1))
+-          increaseRoleCanvasSize(rc, Math.max(labelStart + line.length, 1), Math.max(labelY + 1, 1))
+-          for (let i = 0; i < line.length; i++) {
++          increaseSize(canvas, Math.max(labelStart + cells.length, 1), Math.max(labelY + 1, 1))
++          increaseRoleCanvasSize(rc, Math.max(labelStart + cells.length, 1), Math.max(labelY + 1, 1))
++          for (let i = 0; i < cells.length; i++) {
++            const cell = cells[i]!
++            if (cell === WIDE_PAD) continue // written atomically with its lead
+             const lx = labelStart + i
+-            if (lx >= startX && lx <= endX) {
+-              setC(lx, labelY, line[i]!, 'text')
+-            }
++            const wide = cells[i + 1] === WIDE_PAD
++            // Keep wide-glyph pairs atomic within the gap region
++            if (lx < startX || lx + (wide ? 1 : 0) > endX) continue
++            setC(lx, labelY, cell, 'text')
++            if (wide) setC(lx + 1, labelY, WIDE_PAD, 'text')
+           }
+         }
+       }
+@@ -413,16 +419,16 @@ export function renderErAscii(text: string, config: AsciiConfig, colorMode?: Col
+         const startLabelY = midY - Math.floor((lines.length - 1) / 2)
+ 
+         for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+-          const line = lines[lineIdx]!
++          const cells = toCells(lines[lineIdx]!)
+           const labelX = lineX + 2
+           const y = startLabelY + lineIdx
+           if (y >= 0) {
+-            for (let i = 0; i < line.length; i++) {
++            for (let i = 0; i < cells.length; i++) {
+               const lx = labelX + i
+               if (lx >= 0) {
+                 increaseSize(canvas, lx + 1, y + 1)
+                 increaseRoleCanvasSize(rc, lx + 1, y + 1)
+-                setC(lx, y, line[i]!, 'text')
++                setC(lx, y, cells[i]!, 'text')
+               }
+             }
+           }
+diff --git a/src/ascii/multiline-utils.ts b/src/ascii/multiline-utils.ts
+index 347d260..7519789 100644
+--- a/src/ascii/multiline-utils.ts
++++ b/src/ascii/multiline-utils.ts
+@@ -8,6 +8,7 @@
+ 
+ import type { Canvas } from './types.ts'
+ import { drawText } from './canvas.ts'
++import { displayWidth } from '../text-metrics.ts'
+ 
+ /**
+  * Split a label into lines.
+@@ -23,7 +24,7 @@ export function splitLines(label: string): string[] {
+  */
+ export function maxLineWidth(label: string): number {
+   const lines = splitLines(label)
+-  return Math.max(...lines.map(l => l.length), 0)
++  return Math.max(...lines.map(l => displayWidth(l)), 0)
+ }
+ 
+ /**
+@@ -53,7 +54,7 @@ export function drawMultilineTextCentered(
+   for (let i = 0; i < lines.length; i++) {
+     const line = lines[i]!
+     // Center each line horizontally
+-    const startX = cx - Math.floor(line.length / 2)
++    const startX = cx - Math.floor(displayWidth(line) / 2)
+     // Force overwrite for node labels (they take priority)
+     drawText(canvas, { x: startX, y: startY + i }, line, true)
+   }
+diff --git a/src/ascii/sequence.ts b/src/ascii/sequence.ts
+index 5ff5eaa..93b3eea 100644
+--- a/src/ascii/sequence.ts
++++ b/src/ascii/sequence.ts
+@@ -14,6 +14,7 @@ import type { SequenceDiagram, Block } from '../sequence/types.ts'
+ import type { Canvas, AsciiConfig, RoleCanvas, CharRole, AsciiTheme, ColorMode } from './types.ts'
+ import { mkCanvas, mkRoleCanvas, canvasToString, increaseSize, increaseRoleCanvasSize, setRole } from './canvas.ts'
+ import { splitLines, maxLineWidth, lineCount } from './multiline-utils.ts'
++import { displayWidth, toCells, WIDE_PAD } from '../text-metrics.ts'
+ 
+ /** Classify a box-drawing character as 'border' or 'text'. */
+ function classifyBoxChar(ch: string): CharRole {
+@@ -148,7 +149,7 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+         curY += 1
+         const note = diagram.notes[n]!
+         const nLines = splitLines(note.text)
+-        const nWidth = Math.max(...nLines.map(l => l.length)) + 4
++        const nWidth = Math.max(...nLines.map(l => displayWidth(l))) + 4
+         const nHeight = nLines.length + 2
+ 
+         // Determine x position based on note.position
+@@ -198,7 +199,7 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+     const msg = diagram.messages[m]!
+     if (msg.from === msg.to) {
+       const fi = actorIdx.get(msg.from)!
+-      const selfRight = llX[fi]! + 6 + 2 + msg.label.length
++      const selfRight = llX[fi]! + 6 + 2 + displayWidth(msg.label)
+       totalW = Math.max(totalW, selfRight + 1)
+     }
+   }
+@@ -217,6 +218,24 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+     }
+   }
+ 
++  /**
++   * Write label cells starting at x0, keeping wide-glyph pairs atomic:
++   * a glyph and its WIDE_PAD continuation land together or not at all,
++   * clamped to [minX, maxXExcl) and the canvas bounds.
++   */
++  function setCells(x0: number, y: number, cells: string[], role: CharRole, minX = 0, maxXExcl = canvas.length): void {
++    const limit = Math.min(maxXExcl, canvas.length)
++    for (let i = 0; i < cells.length; i++) {
++      const cell = cells[i]!
++      if (cell === WIDE_PAD) continue // written atomically with its lead
++      const x = x0 + i
++      const wide = cells[i + 1] === WIDE_PAD
++      if (x < minX || x + (wide ? 1 : 0) >= limit) continue
++      setC(x, y, cell, role)
++      if (wide) setC(x + 1, y, WIDE_PAD, role)
++    }
++  }
++
+   // ---- DRAW: helper to place a bordered actor box (supports multi-line labels) ----
+ 
+   function drawActorBox(cx: number, topY: number, label: string): void {
+@@ -238,10 +257,9 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+       setC(left + w - 1, row, V, 'border')
+       // Center this line within the box
+       const line = lines[i]!
+-      const ls = left + 1 + boxPad + Math.floor((maxW - line.length) / 2)
+-      for (let j = 0; j < line.length; j++) {
+-        setC(ls + j, row, line[j]!, 'text')
+-      }
++      const cells = toCells(line)
++      const ls = left + 1 + boxPad + Math.floor((maxW - cells.length) / 2)
++      setCells(ls, row, cells, 'text')
+     }
+ 
+     // Bottom border
+@@ -305,9 +323,8 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+       // Row 1: vertical on right side + label
+       setC(fromX + loopW, y0 + 1, V, 'line')
+       const labelX = fromX + loopW + 2
+-      for (let i = 0; i < msg.label.length; i++) {
+-        if (labelX + i < totalW) setC(labelX + i, y0 + 1, msg.label[i]!, 'text')
+-      }
++      const selfCells = toCells(msg.label)
++      setCells(labelX, y0 + 1, selfCells, 'text', 0, totalW)
+ 
+       // Row 2: arrow-back + horizontal + bottom-right corner
+       const arrowChar = isFilled ? (useAscii ? '<' : '◀') : (useAscii ? '<' : '◁')
+@@ -325,13 +342,10 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+       const msgLines = splitLines(msg.label)
+ 
+       for (let lineIdx = 0; lineIdx < msgLines.length; lineIdx++) {
+-        const line = msgLines[lineIdx]!
+-        const labelStart = midX - Math.floor(line.length / 2)
++        const cells = toCells(msgLines[lineIdx]!)
++        const labelStart = midX - Math.floor(cells.length / 2)
+         const y = labelY + lineIdx
+-        for (let i = 0; i < line.length; i++) {
+-          const lx = labelStart + i
+-          if (lx >= 0 && lx < totalW) setC(lx, y, line[i]!, 'text')
+-        }
++        setCells(labelStart, y, cells, 'text', 0, totalW)
+       }
+ 
+       // Draw arrow line
+@@ -380,10 +394,8 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+     const hdrLines = splitLines(hdrLabel)
+ 
+     for (let lineIdx = 0; lineIdx < hdrLines.length && topY + lineIdx < botY; lineIdx++) {
+-      const line = hdrLines[lineIdx]!
+-      for (let i = 0; i < line.length && bLeft + 1 + i < bRight; i++) {
+-        setC(bLeft + 1 + i, topY + lineIdx, line[i]!, 'text')
+-      }
++      const cells = toCells(hdrLines[lineIdx]!)
++      setCells(bLeft + 1, topY + lineIdx, cells, 'text', bLeft + 1, bRight)
+     }
+ 
+     // Bottom border
+@@ -408,10 +420,8 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+       // Divider label
+       const dLabel = block.dividers[d]!.label
+       if (dLabel) {
+-        const dStr = `[${dLabel}]`
+-        for (let i = 0; i < dStr.length && bLeft + 1 + i < bRight; i++) {
+-          setC(bLeft + 1 + i, dY, dStr[i]!, 'text')
+-        }
++        const dCells = toCells(`[${dLabel}]`)
++        setCells(bLeft + 1, dY, dCells, 'text', bLeft + 1, bRight)
+       }
+     }
+   }
+@@ -431,9 +441,8 @@ export function renderSequenceAscii(text: string, config: AsciiConfig, colorMode
+       const ly = np.y + 1 + l
+       setC(np.x, ly, V, 'border')
+       setC(np.x + np.width - 1, ly, V, 'border')
+-      for (let i = 0; i < np.lines[l]!.length; i++) {
+-        setC(np.x + 2 + i, ly, np.lines[l]![i]!, 'text')
+-      }
++      const cells = toCells(np.lines[l]!)
++      setCells(np.x + 2, ly, cells, 'text')
+     }
+     // Bottom border
+     const by = np.y + np.height - 1
+diff --git a/src/ascii/shapes/rectangle.ts b/src/ascii/shapes/rectangle.ts
+index 5d35dc3..ae2f3d8 100644
+--- a/src/ascii/shapes/rectangle.ts
++++ b/src/ascii/shapes/rectangle.ts
+@@ -13,6 +13,7 @@ import { splitLines } from '../multiline-utils.ts'
+ import type { ShapeRenderer, ShapeDimensions, ShapeRenderOptions } from './types.ts'
+ import { dirEquals } from '../edge-routing.ts'
+ import { type CornerChars, getCorners } from './corners.ts'
++import { displayWidth, toCells } from '../../text-metrics.ts'
+ 
+ // ============================================================================
+ // Shared dimension calculation
+@@ -24,7 +25,7 @@ import { type CornerChars, getCorners } from './corners.ts'
+  */
+ export function getBoxDimensions(label: string, options: ShapeRenderOptions): ShapeDimensions {
+   const lines = splitLines(label)
+-  const maxLineWidth = Math.max(...lines.map(l => l.length), 0)
++  const maxLineWidth = Math.max(...lines.map(l => displayWidth(l)), 0)
+   const lineCount = lines.length
+ 
+   // Width: 2*padding + maxLineWidth + 2 border chars
+@@ -108,12 +109,13 @@ export function renderBox(
+ 
+   for (let i = 0; i < lines.length; i++) {
+     const line = lines[i]!
+-    const textX = Math.floor(w / 2) - Math.ceil(line.length / 2) + 1
+-    for (let j = 0; j < line.length; j++) {
++    const cells = toCells(line)
++    const textX = Math.floor(w / 2) - Math.ceil(cells.length / 2) + 1
++    for (let j = 0; j < cells.length; j++) {
+       const x = textX + j
+       const y = startY + i
+       if (x >= 0 && x < canvas.length && y >= 0 && y < canvas[0]!.length) {
+-        canvas[x]![y] = line[j]!
++        canvas[x]![y] = cells[j]!
+       }
+     }
+   }
+diff --git a/src/ascii/shapes/special.ts b/src/ascii/shapes/special.ts
+index e7ce95d..6a8a5f1 100644
+--- a/src/ascii/shapes/special.ts
++++ b/src/ascii/shapes/special.ts
+@@ -13,6 +13,7 @@ import type { ShapeRenderer, ShapeDimensions, ShapeRenderOptions } from './types
+ import { dirEquals } from '../edge-routing.ts'
+ import { getBoxDimensions, renderBox, getBoxAttachmentPoint } from './rectangle.ts'
+ import { getCorners } from './corners.ts'
++import { displayWidth, toCells } from '../../text-metrics.ts'
+ 
+ // ============================================================================
+ // Subroutine — keeps custom double-border rendering
+@@ -28,7 +29,7 @@ import { getCorners } from './corners.ts'
+ export const subroutineRenderer: ShapeRenderer = {
+   getDimensions(label: string, options: ShapeRenderOptions): ShapeDimensions {
+     const lines = splitLines(label)
+-    const maxLineWidth = Math.max(...lines.map(l => l.length), 0)
++    const maxLineWidth = Math.max(...lines.map(l => displayWidth(l)), 0)
+     const lineCount = lines.length
+ 
+     const innerWidth = 2 * options.padding + maxLineWidth
+@@ -86,12 +87,13 @@ export const subroutineRenderer: ShapeRenderer = {
+ 
+     for (let i = 0; i < lines.length; i++) {
+       const line = lines[i]!
+-      const textX = Math.floor(width / 2) - Math.floor(line.length / 2)
+-      for (let j = 0; j < line.length; j++) {
++      const cells = toCells(line)
++      const textX = Math.floor(width / 2) - Math.floor(cells.length / 2)
++      for (let j = 0; j < cells.length; j++) {
+         const x = textX + j
+         const y = startY + i
+         if (x > 1 && x < width - 2 && y > 0 && y < height - 1) {
+-          canvas[x]![y] = line[j]!
++          canvas[x]![y] = cells[j]!
+         }
+       }
+     }
+@@ -142,7 +144,7 @@ export const doublecircleRenderer: ShapeRenderer = {
+ export const cylinderRenderer: ShapeRenderer = {
+   getDimensions(label: string, options: ShapeRenderOptions): ShapeDimensions {
+     const lines = splitLines(label)
+-    const maxLineWidth = Math.max(...lines.map(l => l.length), 0)
++    const maxLineWidth = Math.max(...lines.map(l => displayWidth(l)), 0)
+     const lineCount = lines.length
+ 
+     const innerWidth = 2 * options.padding + maxLineWidth
+@@ -204,12 +206,13 @@ export const cylinderRenderer: ShapeRenderer = {
+ 
+     for (let i = 0; i < lines.length; i++) {
+       const line = lines[i]!
+-      const textX = Math.floor(width / 2) - Math.floor(line.length / 2)
+-      for (let j = 0; j < line.length; j++) {
++      const cells = toCells(line)
++      const textX = Math.floor(width / 2) - Math.floor(cells.length / 2)
++      for (let j = 0; j < cells.length; j++) {
+         const x = textX + j
+         const y = startY + i
+         if (x > 0 && x < width - 1 && y > 1 && y < height - 2) {
+-          canvas[x]![y] = line[j]!
++          canvas[x]![y] = cells[j]!
+         }
+       }
+     }
+diff --git a/src/ascii/shapes/stadium.ts b/src/ascii/shapes/stadium.ts
+index b400cad..c6c7af5 100644
+--- a/src/ascii/shapes/stadium.ts
++++ b/src/ascii/shapes/stadium.ts
+@@ -11,6 +11,7 @@ import { mkCanvas } from '../canvas.ts'
+ import { splitLines } from '../multiline-utils.ts'
+ import type { ShapeRenderer, ShapeDimensions, ShapeRenderOptions } from './types.ts'
+ import { getBoxAttachmentPoint } from './rectangle.ts'
++import { displayWidth, toCells } from '../../text-metrics.ts'
+ 
+ /**
+  * Stadium (pill) shape renderer.
+@@ -30,7 +31,7 @@ import { getBoxAttachmentPoint } from './rectangle.ts'
+ export const stadiumRenderer: ShapeRenderer = {
+   getDimensions(label: string, options: ShapeRenderOptions): ShapeDimensions {
+     const lines = splitLines(label)
+-    const maxLineWidth = Math.max(...lines.map(l => l.length), 0)
++    const maxLineWidth = Math.max(...lines.map(l => displayWidth(l)), 0)
+     const lineCount = lines.length
+ 
+     const innerWidth = 2 * options.padding + maxLineWidth
+@@ -95,12 +96,13 @@ export const stadiumRenderer: ShapeRenderer = {
+ 
+     for (let i = 0; i < lines.length; i++) {
+       const line = lines[i]!
+-      const textX = Math.floor(width / 2) - Math.floor(line.length / 2)
+-      for (let j = 0; j < line.length; j++) {
++      const cells = toCells(line)
++      const textX = Math.floor(width / 2) - Math.floor(cells.length / 2)
++      for (let j = 0; j < cells.length; j++) {
+         const x = textX + j
+         const y = startY + i
+         if (x > 0 && x < width - 1 && y >= 0 && y < height) {
+-          canvas[x]![y] = line[j]!
++          canvas[x]![y] = cells[j]!
+         }
+       }
+     }
+diff --git a/src/ascii/xychart.ts b/src/ascii/xychart.ts
+index 0dafc16..30713e6 100644
+--- a/src/ascii/xychart.ts
++++ b/src/ascii/xychart.ts
+@@ -16,6 +16,7 @@ import type { XYChart } from '../xychart/types.ts'
+ import type { AsciiConfig, AsciiTheme, ColorMode, CharRole, Canvas, RoleCanvas } from './types.ts'
+ import { colorizeText } from './ansi.ts'
+ import { getSeriesColor, CHART_ACCENT_FALLBACK } from '../xychart/colors.ts'
++import { displayWidth, toCells, WIDE_PAD } from '../text-metrics.ts'
+ 
+ // ============================================================================
+ // Constants
+@@ -117,7 +118,7 @@ function renderVertical(
+   const yRange = chart.yAxis.range!
+   const yTicks = niceTickValues(yRange.min, yRange.max)
+   const yLabels = yTicks.map(v => formatTickValue(v))
+-  const yGutter = Math.max(...yLabels.map(l => l.length)) + 1
++  const yGutter = Math.max(...yLabels.map(l => displayWidth(l))) + 1
+ 
+   const plotW = Math.max(PLOT_WIDTH, dataCount * 6)
+   const plotH = PLOT_HEIGHT
+@@ -154,7 +155,7 @@ function renderVertical(
+ 
+   // 1. Title
+   if (hasTitle && titleRow >= 0) {
+-    writeText(canvas, roles, titleRow, Math.floor(totalW / 2 - chart.title!.length / 2), chart.title!, 'text')
++    writeText(canvas, roles, titleRow, Math.floor(totalW / 2 - displayWidth(chart.title!) / 2), chart.title!, 'text')
+   }
+ 
+   // 2. Legend
+@@ -179,7 +180,7 @@ function renderVertical(
+     // Tick mark on axis
+     set(canvas, roles, displayRow, plotLeft - 1, row === 0 ? ch.origin : ch.yTick, 'border')
+     // Label
+-    const labelStart = yGutter - label.length
++    const labelStart = yGutter - displayWidth(label)
+     writeText(canvas, roles, displayRow, Math.max(0, labelStart), label, 'text')
+   }
+ 
+@@ -192,14 +193,14 @@ function renderVertical(
+     set(canvas, roles, xAxisRow, cx, ch.xTick, 'border')
+     // Label below
+     const label = catLabels[i]!
+-    const labelStart = cx - Math.floor(label.length / 2)
++    const labelStart = cx - Math.floor(displayWidth(label) / 2)
+     writeText(canvas, roles, xLabelRow, Math.max(0, labelStart), label, 'text')
+   }
+ 
+   // 5. X-axis title
+   if (hasXTitle && xTitleRow >= 0) {
+     const title = chart.xAxis.title!
+-    writeText(canvas, roles, xTitleRow, Math.floor(totalW / 2 - title.length / 2), title, 'text')
++    writeText(canvas, roles, xTitleRow, Math.floor(totalW / 2 - displayWidth(title) / 2), title, 'text')
+   }
+ 
+   // 6. Grid lines (subtle horizontal dots at y-tick positions)
+@@ -279,7 +280,7 @@ function renderHorizontal(
+   const yRange = chart.yAxis.range!
+   const valueTicks = niceTickValues(yRange.min, yRange.max)
+   const catLabels = getCategoryLabels(chart, dataCount)
+-  const catGutter = Math.max(...catLabels.map(l => l.length)) + 1
++  const catGutter = Math.max(...catLabels.map(l => displayWidth(l))) + 1
+ 
+   const plotW = Math.max(PLOT_WIDTH, 40)
+   const bandH = Math.max(2, Math.floor(PLOT_HEIGHT / dataCount))
+@@ -310,7 +311,7 @@ function renderHorizontal(
+ 
+   // Title
+   if (hasTitle) {
+-    writeText(canvas, roles, 0, Math.floor(totalW / 2 - chart.title!.length / 2), chart.title!, 'text')
++    writeText(canvas, roles, 0, Math.floor(totalW / 2 - displayWidth(chart.title!) / 2), chart.title!, 'text')
+   }
+ 
+   // Legend
+@@ -328,7 +329,7 @@ function renderHorizontal(
+   for (let i = 0; i < dataCount; i++) {
+     const my = bandMid(i)
+     const label = catLabels[i]!
+-    const labelStart = catGutter - label.length
++    const labelStart = catGutter - displayWidth(label)
+     writeText(canvas, roles, my, Math.max(0, labelStart), label, 'text')
+   }
+ 
+@@ -341,13 +342,13 @@ function renderHorizontal(
+     if (cx < plotLeft || cx >= plotLeft + plotW) continue
+     set(canvas, roles, xAxisRow, cx, ch.xTick, 'border')
+     const label = formatTickValue(tick)
+-    writeText(canvas, roles, xAxisRow + 1, cx - Math.floor(label.length / 2), label, 'text')
++    writeText(canvas, roles, xAxisRow + 1, cx - Math.floor(displayWidth(label) / 2), label, 'text')
+   }
+ 
+   // Y-axis title
+   if (hasYTitle) {
+     const title = chart.yAxis.title!
+-    writeText(canvas, roles, totalH - 1, Math.floor(totalW / 2 - title.length / 2), title, 'text')
++    writeText(canvas, roles, totalH - 1, Math.floor(totalW / 2 - displayWidth(title) / 2), title, 'text')
+   }
+ 
+   // Grid lines (vertical at value tick positions)
+@@ -646,7 +647,7 @@ function drawLegend(
+   let totalLen = 0
+   for (let i = 0; i < items.length; i++) {
+     if (i > 0) totalLen += 2 // gap between items
+-    totalLen += 1 + 1 + items[i]!.label.length // symbol + space + label
++    totalLen += 1 + 1 + displayWidth(items[i]!.label) // symbol + space + label
+   }
+ 
+   const startCol = Math.max(0, Math.floor(totalW / 2 - totalLen / 2))
+@@ -662,7 +663,7 @@ function drawLegend(
+     col += 1
+     // Label text
+     writeText(canvas, roles, row, col, item.label, 'text')
+-    col += item.label.length
++    col += displayWidth(item.label)
+   }
+ }
+ 
+@@ -702,8 +703,16 @@ function get(canvas: Canvas, row: number, col: number): string {
+ }
+ 
+ function writeText(canvas: Canvas, roles: RoleCanvas, row: number, startCol: number, text: string, role: CharRole): void {
+-  for (let i = 0; i < text.length; i++) {
+-    set(canvas, roles, row, startCol + i, text[i]!, role)
++  const cells = toCells(text)
++  for (let i = 0; i < cells.length; i++) {
++    const cell = cells[i]!
++    if (cell === WIDE_PAD) continue // written atomically with its lead
++    const col = startCol + i
++    const wide = cells[i + 1] === WIDE_PAD
++    // Keep wide-glyph pairs atomic at canvas bounds
++    if (col < 0 || col + (wide ? 1 : 0) >= canvas.length) continue
++    set(canvas, roles, row, col, cell, role)
++    if (wide) set(canvas, roles, row, col + 1, WIDE_PAD, role)
+   }
+ }
+ 
+@@ -728,7 +737,10 @@ function canvasToString(
+     const rowRoles: (CharRole | null)[] = []
+     const rowHex: (string | null)[] = []
+     for (let col = 0; col < width; col++) {
+-      chars.push(canvas[col]![row]!)
++      const c = canvas[col]![row]!
++      // Skip wide-glyph continuation cells: the glyph itself spans 2 columns
++      if (c === WIDE_PAD) continue
++      chars.push(c)
+       rowRoles.push(roles[col]![row]!)
+       rowHex.push(hexCanvas[col]![row]!)
+     }
+diff --git a/src/text-metrics.ts b/src/text-metrics.ts
+index 07766ab..bcac021 100644
+--- a/src/text-metrics.ts
++++ b/src/text-metrics.ts
+@@ -110,6 +110,103 @@ function isEmoji(char: string): boolean {
+   return EMOJI_REGEX.test(char)
+ }
+ 
++// ============================================================================
++// Terminal display width — used by the ASCII renderer
++//
++// Terminals render most characters in 1 column, but East Asian wide
++// characters (CJK ideographs, Hangul, kana, fullwidth forms) and
++// emoji-presentation glyphs occupy 2 columns. The ASCII canvas is a
++// cell-per-column grid, so its width math counts display columns rather
++// than code units.
++//
++// Text is measured in grapheme clusters (Intl.Segmenter): a cluster that
++// renders 2 columns is stored as its full string in one canvas cell
++// followed by WIDE_PAD in the continuation cell it covers. The ASCII
++// serializers drop WIDE_PAD cells when joining a row, so the emitted line
++// occupies exactly as many terminal columns as the canvas has cells.
++//
++// Width policy (terminal wcwidth-style, locale-insensitive):
++//   - East Asian Wide/Fullwidth code points ............ 2
++//   - Emoji_Presentation scalars (e.g. 🚀, ⌚) .......... 2
++//   - VS16 / ZWJ emoji sequences, regional-indicator flags 2
++//   - combining marks / variation selectors / ZWJ ....... 0 (within cluster)
++//   - everything else (incl. text-presentation symbols
++//     like ◀ ▶ △ that the renderer uses as 1-cell glyphs) 1
++// East Asian Ambiguous characters (e.g. ½ ·) are treated as narrow.
++// ============================================================================
++
++/**
++ * Placeholder occupying the second cell of a fullwidth glyph on the ASCII
++ * canvas. U+0000 cannot appear in parsed Mermaid labels, is treated as
++ * occupied label content by canvas merging, and is stripped at
++ * serialization time. Invariant: a WIDE_PAD cell always sits immediately
++ * right of its lead cell; canvas writes keep the pair atomic.
++ */
++export const WIDE_PAD = '\u0000'
++
++/** Scalars that default to emoji presentation render 2 columns wide. */
++const EMOJI_PRESENTATION = /\p{Emoji_Presentation}/u
++
++const ZWJ = '\u200d'
++const VS16 = '\ufe0f'
++
++const graphemeSegmenter = new Intl.Segmenter()
++
++/** Display width of a single grapheme cluster in terminal columns. */
++function clusterWidth(cluster: string): number {
++  const first = cluster.codePointAt(0) ?? 0
++  // Regional-indicator pair renders as one 2-column flag glyph.
++  if (first >= 0x1f1e6 && first <= 0x1f1ff) return 2
++  // ZWJ emoji sequence renders as a single 2-column glyph.
++  if (cluster.includes(ZWJ)) return 2
++  // An extended grapheme cluster renders as one glyph at its base scalar's
++  // width; trailing extenders (combining marks, emoji/skin-tone modifiers,
++  // variation selectors) fold into the base and add no columns.
++  const base = String.fromCodePoint(first)
++  let width = isFullwidth(first) || EMOJI_PRESENTATION.test(base) ? 2 : 1
++  // VS16 upgrades a text-presentation base to emoji presentation (2 cols).
++  if (width === 1 && cluster.includes(VS16)) width = 2
++  return width
++}
++
++/**
++ * Display width of a string in terminal columns, measured over grapheme
++ * clusters. ASCII-only strings take a fast path.
++ */
++export function displayWidth(text: string): number {
++  let ascii = true
++  for (let i = 0; i < text.length; i++) {
++    if (text.charCodeAt(i) > 0x7e) {
++      ascii = false
++      break
++    }
++  }
++  if (ascii) return text.length
++
++  let width = 0
++  for (const seg of graphemeSegmenter.segment(text)) {
++    width += clusterWidth(seg.segment)
++  }
++  return width
++}
++
++/**
++ * Expand a string into ASCII-canvas cells: each 2-column grapheme cluster
++ * is stored whole in one cell and followed by WIDE_PAD, so that
++ * cells.length === displayWidth(text). Per-character placement loops can
++ * iterate the result with plain cell offsets.
++ */
++export function toCells(text: string): string[] {
++  const cells: string[] = []
++  for (const seg of graphemeSegmenter.segment(text)) {
++    cells.push(seg.segment)
++    if (clusterWidth(seg.segment) === 2) {
++      cells.push(WIDE_PAD)
++    }
++  }
++  return cells
++}
++
+ /**
+  * Get the relative width of a single character.
+  *
+-- 
+2.50.1 (Apple Git-155)
+

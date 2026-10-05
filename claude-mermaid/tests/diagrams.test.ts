@@ -183,6 +183,14 @@ describe('fitLines', () => {
   test('width counts code points, not UTF-16 units', () => {
     expect(widthOf([[seg('┌─┐')]])).toBe(3)
   })
+
+  test('CJK takes two columns, so it is measured and cut by display width', () => {
+    expect(widthOf([[seg('│ 你截圖 │')]])).toBe(10)
+    const fit = fitLines([[seg('│ ', 'border'), seg('你截圖', 'text'), seg(' │', 'border')]], 6)
+    // room 6 leaves 5 for text: '│ ' (2) + '你' (2), and '截' would straddle the cut
+    expect(fit.lines[0]).toEqual([seg('│ ', 'border'), seg('你', 'text'), seg('…')])
+    expect(fit.overflow).toBe(4)
+  })
 })
 
 describe('ansiLineOf', () => {

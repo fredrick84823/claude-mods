@@ -10,7 +10,8 @@
     "test:e2e": "bun test tests/e2e",
     "test:all": "bun test",
     "typecheck": "bunx -p typescript tsc -p . && bunx -p typescript tsc -p tsconfig.test.json",
-    "validate": "claude plugin validate .claude-plugin/plugin.json && claude plugin validate ."
+    "validate": "claude plugin validate .claude-plugin/plugin.json && claude plugin validate .",
+    "patch:vendor": "for p in scripts/patches/*.patch; do patch -s -p1 -d node_modules/beautiful-mermaid < \"$p\" || exit 1; done"
   },
   "devDependencies": {
     "@copilotkit/aimock": "^1.42.0",

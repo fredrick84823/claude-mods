@@ -17,3 +17,5 @@ export type AsciiRenderOptions = {
   theme?: Partial<AsciiTheme>
 }
 export function renderMermaidAscii(text: string, options?: AsciiRenderOptions): string
+/** Terminal columns a string takes: CJK, fullwidth and emoji count as two */
+export function displayWidth(text: string): number

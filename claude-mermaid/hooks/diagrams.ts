@@ -1,4 +1,4 @@
-import { renderMermaidAscii } from './vendor/mermaid-ascii.js'
+import { displayWidth, renderMermaidAscii } from './vendor/mermaid-ascii.js'
 
 // Pure functions over mermaid blocks: finding them in a message's markdown,
 // drawing them as role-tagged box art, fitting the art to a width, and
@@ -183,8 +183,9 @@ export const renderOf = (source: string, useAscii: boolean): Rendered => {
   }
 }
 
+// widths are terminal columns, not code points: a CJK label takes two
 export const widthOf = (lines: readonly (readonly Segment[])[]): number =>
-  lines.reduce((max, line) => Math.max(max, [...plainOf(line)].length), 0)
+  lines.reduce((max, line) => Math.max(max, displayWidth(plainOf(line))), 0)
 
 // lines wider than `columns` are cut with an ellipsis; `overflow` says by how much
 export const fitLines = (lines: readonly (readonly Segment[])[], columns: number): Fitted => {
@@ -192,14 +193,20 @@ export const fitLines = (lines: readonly (readonly Segment[])[], columns: number
   const room = Math.max(1, columns)
   if (width <= room) return { lines: lines.map(line => [...line]), width, overflow: 0 }
   const fitted = lines.map(line => {
-    if ([...plainOf(line)].length <= room) return [...line]
+    if (displayWidth(plainOf(line)) <= room) return [...line]
     const out: Segment[] = []
+    // a wide character that would straddle the cut is dropped whole
     let left = room - 1
     for (const segment of line) {
       if (left <= 0) break
-      const chars = [...segment.text]
-      out.push({ text: chars.slice(0, left).join(''), role: segment.role })
-      left -= chars.length
+      let text = ''
+      for (const ch of segment.text) {
+        const w = displayWidth(ch)
+        if (w > left) { left = 0; break }
+        text += ch
+        left -= w
+      }
+      if (text) out.push({ text, role: segment.role })
     }
     out.push({ text: '…', role: null })
     return out
