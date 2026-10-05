@@ -7,7 +7,7 @@ const SURFACES = ['terminal', 'desktop'] as const
 test('plain reply is re-drawn as Markdown inside a padded Box', async $ => {
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'AssistantMessage',
+      plugin: 'hush-ui', surface, component: 'AssistantMessage',
       props: { text: '| a | b |\n|---|---|\n| 1 | 2 |', isFirstOfReply: true },
     })
     const tree = await ui.drawn()
@@ -15,7 +15,7 @@ test('plain reply is re-drawn as Markdown inside a padded Box', async $ => {
     expect(JSON.stringify(tree)).toContain('Markdown')
     expect(JSON.stringify(tree)).toContain('●')
     const later = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'AssistantMessage',
+      plugin: 'hush-ui', surface, component: 'AssistantMessage',
       props: { text: 'second block', isFirstOfReply: false },
     })
     expect(JSON.stringify(await later.drawn())).not.toContain('●')
@@ -29,7 +29,7 @@ test('reply with a mermaid fence is passed to the chain untouched', async ($, on
   })
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'AssistantMessage',
+      plugin: 'hush-ui', surface, component: 'AssistantMessage',
       props: { text: '```mermaid\nflowchart LR\n  A --> B\n```', isFirstOfReply: true },
     })
     expect(await ui.drawn()).toMatchObject({ type: 'Text' })
@@ -43,7 +43,7 @@ test('composer prompt is re-drawn padded like a reply; other user rows pass thro
   })
   for (const surface of SURFACES) {
     const prompt = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'UserMessage',
+      plugin: 'hush-ui', surface, component: 'UserMessage',
       props: { text: 'hi there', origin: { kind: 'composer' }, isExpanded: true },
     })
     const tree = await prompt.drawn()
@@ -54,7 +54,7 @@ test('composer prompt is re-drawn padded like a reply; other user rows pass thro
     expect(JSON.stringify(tree)).toContain('▍')
     expect(JSON.stringify(tree)).not.toContain('ENGINE')
     const other = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'UserMessage',
+      plugin: 'hush-ui', surface, component: 'UserMessage',
       props: { text: 'done', origin: { kind: 'unclassified' }, isExpanded: false },
     })
     expect(JSON.stringify(await other.drawn())).toContain('ENGINE')
@@ -72,20 +72,20 @@ test('table width counts CJK as two cells', () => {
 test('a table that would need shrinking drops the padding', async $ => {
   for (const surface of SURFACES) {
     const narrow = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'AssistantMessage',
+      plugin: 'hush-ui', surface, component: 'AssistantMessage',
       viewport: { columns: 70, rows: 40 },
       props: { text: WIDE, isFirstOfReply: true },
     })
     expect(await narrow.drawn()).toMatchObject({ props: { paddingLeft: 0, paddingRight: 0 } })
     const wide = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'AssistantMessage',
+      plugin: 'hush-ui', surface, component: 'AssistantMessage',
       viewport: { columns: 200, rows: 40 },
       props: { text: WIDE, isFirstOfReply: true },
     })
     expect(await wide.drawn()).toMatchObject({ props: { paddingLeft: 2, paddingRight: 5 } })
     // gutter 5: 89 cols → (89 - 5 - 80) / 2 = 2
     const mid = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'AssistantMessage',
+      plugin: 'hush-ui', surface, component: 'AssistantMessage',
       viewport: { columns: 89, rows: 40 },
       props: { text: WIDE, isFirstOfReply: true },
     })

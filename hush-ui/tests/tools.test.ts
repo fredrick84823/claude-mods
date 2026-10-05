@@ -29,7 +29,7 @@ const BASH = { tool_use_id: 't1', tool: 'Bash', input: { command: 'pytest', desc
 test('Bash row is one line with its verdict; failure is loud', async $ => {
   for (const surface of SURFACES) {
     const ok = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'ToolUse',
+      plugin: 'hush-ui', surface, component: 'ToolUse',
       props: { ...BASH, isErrored: false, output: { stdout: '42 passed', stderr: '', interrupted: false } },
     })
     const okTree = JSON.stringify(await ok.drawn())
@@ -37,7 +37,7 @@ test('Bash row is one line with its verdict; failure is loud', async $ => {
     expect(okTree).toContain('"dimColor":true')
     expect(okTree).toContain('$ pytest')
     const bad = await $.ui.mount({
-      plugin: 'calm-ui', surface, component: 'ToolUse',
+      plugin: 'hush-ui', surface, component: 'ToolUse',
       props: { ...BASH, isErrored: true, output: 'Exit code 1\nls: /x: No such file or directory' },
     })
     const badTree = JSON.stringify(await bad.drawn())
@@ -53,11 +53,11 @@ test('result block: hidden on success, engine-drawn on error and for other tools
     return h(Text, null, 'ENGINE') as RenderElement
   })
   for (const surface of SURFACES) {
-    const ok = await $.ui.mount({ plugin: 'calm-ui', surface, component: 'ToolResult', props: { tool_use_id: 't1', tool: 'Bash', output: {}, isErrored: false } })
+    const ok = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolResult', props: { tool_use_id: 't1', tool: 'Bash', output: {}, isErrored: false } })
     expect(JSON.stringify(await ok.drawn())).not.toContain('ENGINE')
-    const bad = await $.ui.mount({ plugin: 'calm-ui', surface, component: 'ToolResult', props: { tool_use_id: 't2', tool: 'Bash', output: {}, isErrored: true } })
+    const bad = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolResult', props: { tool_use_id: 't2', tool: 'Bash', output: {}, isErrored: true } })
     expect(JSON.stringify(await bad.drawn())).toContain('ENGINE')
-    const edit = await $.ui.mount({ plugin: 'calm-ui', surface, component: 'ToolResult', props: { tool_use_id: 't3', tool: 'Edit', output: {}, isErrored: false } })
+    const edit = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolResult', props: { tool_use_id: 't3', tool: 'Edit', output: {}, isErrored: false } })
     expect(JSON.stringify(await edit.drawn())).toContain('ENGINE')
   }
 })

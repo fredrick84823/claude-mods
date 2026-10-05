@@ -4,7 +4,7 @@ import { COMPACT_TOOLS, callOf, commandOf, errorLinesOf, exitCodeOf, resultOf } 
 // Presentation only. The engine's own drawing is laid out at full terminal
 // width, so wrapping it in padding wraps its tables. Instead we re-draw the
 // reply's markdown inside a padded Box, where it lays out to the narrower room.
-// A reply still holding a ```mermaid fence is left to claude-mermaid untouched.
+// A reply still holding a ```mermaid fence is left to mermaid-draw untouched.
 
 const PAD = 5
 const MERMAID_FENCE = /^\s*(```|~~~)\s*mermaid\b/m

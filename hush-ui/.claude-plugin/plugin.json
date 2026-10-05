@@ -1,1 +1,12 @@
-{ "name": "calm-ui", "version": "0.1.0", "description": "Presentation-only: side padding and turn spacing for the transcript; stacks with claude-mermaid" }
+{
+  "name": "hush-ui",
+  "version": "0.2.0",
+  "description": "A quieter Claude Code transcript, presentation only: prompts as cards, Read/Bash rows on one line (failures stay loud), side padding around replies. Stacks with mermaid-draw. Needs function hooks (early access).",
+  "author": {
+    "name": "Fredrick"
+  },
+  "homepage": "https://github.com/fredrick84823/claude-mods",
+  "repository": "https://github.com/fredrick84823/claude-mods",
+  "license": "MIT",
+  "keywords": ["transcript", "terminal", "function-hooks", "mod"]
+}

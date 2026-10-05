@@ -1,4 +1,4 @@
-// One-line summaries for the tool rows calm-ui compacts. Pure, so tests cover them.
+// One-line summaries for the tool rows hush-ui compacts. Pure, so tests cover them.
 
 export const COMPACT_TOOLS = new Set(['Read', 'Bash'])
 const MAX = 60

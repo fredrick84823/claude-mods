@@ -1,19 +1,19 @@
 {
-  "name": "claude-mods",
+  "name": "mods",
   "owner": {
-    "name": "Gal Elmalah"
+    "name": "Fredrick"
   },
-  "description": "Mods for Claude Code by Gal: mermaid diagrams drawn inline in the transcript; /q holds a prompt until the turn ends.",
+  "description": "Claude Code mods: a quieter transcript, and mermaid diagrams drawn inline with CJK labels aligned.",
   "plugins": [
     {
-      "name": "claude-mermaid",
-      "source": "./claude-mermaid",
-      "description": "Mermaid diagrams drawn as box art inline in the transcript."
+      "name": "hush-ui",
+      "source": "./hush-ui",
+      "description": "Prompts as cards, Read/Bash rows on one line, side padding around replies. Presentation only."
     },
     {
-      "name": "claude-queue",
-      "source": "./claude-queue",
-      "description": "/q <text> while Claude is working waits in a stack above the prompt and goes out when the turn ends."
+      "name": "mermaid-draw",
+      "source": "./mermaid-draw",
+      "description": "Mermaid diagrams drawn as box art inline in the transcript; CJK labels keep their boxes aligned."
     }
   ]
 }
