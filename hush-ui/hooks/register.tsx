@@ -1,5 +1,5 @@
-import type { Register } from 'claude-code'
-import { COMPACT_TOOLS, callOf, commandOf, errorLinesOf, exitCodeOf, resultOf } from './tools'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
+import { COMPACT_TOOLS, callOf, commandOf, detailOf, errorLinesOf, exitCodeOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
 // width, so wrapping it in padding wraps its tables. Instead we re-draw the
@@ -22,6 +22,8 @@ const PROMPT_BACKGROUND = 'userMessageBackground'
 // left three-eighths block on the card's background: the line is the card's outer edge
 // ponytail: 200 rows; a prompt card taller than that shows the bar only on its top 200
 const BAR = Array(200).fill('▍').join('\n')
+// the tool card's bar: a theme grey, quieter than the prompt's
+const TOOL_BAR = 'inactive'
 
 // CJK and fullwidth forms take two cells
 const cellsOf = (s: string): number => {
@@ -52,10 +54,26 @@ export const tableCellsOf = (text: string): number => {
   return widest
 }
 
-// /hush toggles: off, Read and Bash rows are the engine's own, full call and output.
+// /hush toggles: off, Read and Bash rows carry a card with the full call and output.
 // ToolUse carries no per-row expand flag, and verbose is often left on for good.
 // ponytail: module variable, so a plugin reload turns it back on; $.state if that matters
 let hushed = true
+
+type Ui = ReturnType<EngineInterface['ui']['resolve']>
+// a card: a bar down the left edge, the theme's prompt background behind the body.
+// The bar's glyphs are an absolute layer clipped to a cell-wide column the body sizes.
+const card = ({ Box, Text }: Ui, bar: string | undefined, paddingY: number, body: RenderChildren) => (
+  <Box flexGrow={1} flexShrink={1}>
+    <Box width={1} flexShrink={0}>
+      <Box position="absolute" top={0} left={0} width={1} height="100%" overflow="hidden">
+        <Text color={bar} backgroundColor={PROMPT_BACKGROUND}>{BAR}</Text>
+      </Box>
+    </Box>
+    <Box flexGrow={1} flexShrink={1} backgroundColor={PROMPT_BACKGROUND} paddingY={paddingY} paddingLeft={BULLET_COLUMNS - 1} paddingRight={1}>
+      {body}
+    </Box>
+  </Box>
+)
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -93,13 +111,16 @@ export const register: Register = on => {
   // Read / Bash rows: one dim line, `Read   path · 218 lines`. Errors stay loud:
   // the header says failed and the engine's ToolResult below shows the error text.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!COMPACT_TOOLS.has(e.props.tool) || !hushed) return next(e)
+    if (!COMPACT_TOOLS.has(e.props.tool)) return next(e)
     const { isRunning, isErrored, isInterrupted, output } = e.props
     const state = isRunning ? '…' : isInterrupted ? 'interrupted' : isErrored ? ['failed', exitCodeOf(output) && `exit ${exitCodeOf(output)}`].filter(Boolean).join(' · ') : resultOf(e.props.tool, output)
-    const command = commandOf(e.props.tool, e.props.input)
+    // /hush off: the card below holds the full call and output instead
+    const detail = hushed || isRunning ? '' : detailOf(e.props.tool, e.props.input, output)
+    const command = detail ? null : commandOf(e.props.tool, e.props.input)
     // the error text is drawn by the row we replace, so we draw its head ourselves
-    const errors = isErrored ? errorLinesOf(output) : []
-    const { Box, Text } = $.ui.resolve(e)
+    const errors = isErrored && !detail ? errorLinesOf(output) : []
+    const ui = $.ui.resolve(e)
+    const { Box, Text } = ui
     return (
       <Box flexDirection="column" paddingLeft={PAD}>
         <Box flexDirection="row">
@@ -128,13 +149,18 @@ export const register: Register = on => {
             <Text color="red" wrap="truncate-end">{line}</Text>
           </Box>
         ))}
+        {detail && (
+          <Box paddingLeft={TOOL_COLUMNS - BULLET_COLUMNS} paddingRight={PAD}>
+            {card(ui, TOOL_BAR, 0, <Text dimColor color={isErrored ? 'red' : undefined}>{detail}</Text>)}
+          </Box>
+        )}
       </Box>
     )
   })
 
-  // the summary already sits on the ToolUse line; a successful result draws nothing
+  // the summary already sits on the ToolUse line, the error under it or in its card
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!COMPACT_TOOLS.has(e.props.tool) || e.props.isErrored || !hushed) return next(e)
+    if (!COMPACT_TOOLS.has(e.props.tool) || (e.props.isErrored && hushed)) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
@@ -144,27 +170,11 @@ export const register: Register = on => {
   // Re-drawn rather than wrapped: the engine's row spans the full width.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.props.origin.kind !== 'composer') return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
     return (
-      <Box paddingLeft={PAD - BULLET_COLUMNS} paddingRight={PAD} marginTop={1}>
-        {/* a cell-wide column whose height the card sets; the thin glyphs are an
-            absolute layer clipped to it, so their count never sizes the row */}
-        <Box width={1} flexShrink={0}>
-          <Box position="absolute" top={0} left={0} width={1} height="100%" overflow="hidden">
-            <Text color={ACCENT} backgroundColor={PROMPT_BACKGROUND}>{BAR}</Text>
-          </Box>
-        </Box>
-        <Box
-          flexGrow={1}
-          flexShrink={1}
-          backgroundColor={PROMPT_BACKGROUND}
-          paddingY={1}
-          paddingLeft={BULLET_COLUMNS - 1}
-          paddingRight={1}
-        >
-          <Text>{e.props.text}</Text>
-        </Box>
-      </Box>
+      <ui.Box paddingLeft={PAD - BULLET_COLUMNS} paddingRight={PAD} marginTop={1}>
+        {card(ui, ACCENT, 1, <ui.Text>{e.props.text}</ui.Text>)}
+      </ui.Box>
     )
   })
 }

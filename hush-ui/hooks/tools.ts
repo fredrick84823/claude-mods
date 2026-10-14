@@ -58,3 +58,17 @@ export const resultOf = (tool: string, output: unknown): string => {
   }
   return ''
 }
+
+// /hush off: the call in full and what it printed, for the card under the row.
+// ponytail: output capped at `max` lines; a pager pane if longer reads are wanted
+export const detailOf = (tool: string, input: unknown, output: unknown, max = 40): string => {
+  const i = obj(input)
+  if (tool === 'Read') return str(i.file_path)
+  if (tool !== 'Bash') return ''
+  const o = obj(output)
+  // an errored call's output is the error text the model read
+  const printed = typeof output === 'string' ? output : [str(o.stdout), str(o.stderr)].filter(s => s.trim()).join('\n')
+  const lines = printed.trimEnd().split('\n').filter((l, n, all) => l.trim() || n < all.length - 1)
+  const shown = lines.length > max ? [...lines.slice(0, max), `… ${lines.length - max} more lines`] : lines
+  return [`$ ${str(i.command).trim()}`, ...shown].filter(Boolean).join('\n')
+}
