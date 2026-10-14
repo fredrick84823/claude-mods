@@ -10,6 +10,9 @@ transcript is drawn, never what Claude said or did.
 | a failed Bash | the error under `⎿` | the row turns red with `failed · exit N` and the first error lines |
 | replies | text from the edge, bullet at column 0 | 5 columns of room each side, the `●` hung in the left room |
 
+`/hush` toggles the Read / Bash rows back to Claude Code's own, full command
+and output (with its per-row `▸`), and again to compact them.
+
 Tables keep their natural width: the side room shrinks just enough for the
 widest table in a reply. A reply holding a ```` ```mermaid ```` fence is left
 untouched, so [mermaid-draw](../mermaid-draw/README.md) can draw it.

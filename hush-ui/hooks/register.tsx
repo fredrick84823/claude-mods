@@ -1,4 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { Register } from 'claude-code'
 import { COMPACT_TOOLS, callOf, commandOf, errorLinesOf, exitCodeOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
@@ -52,17 +52,21 @@ export const tableCellsOf = (text: string): number => {
   return widest
 }
 
-// /config verbose on: tool rows draw the engine's full call and output.
-// ToolUse carries no ctrl+o flag, so verbose is the one switch it can read.
-const isVerbose = async ($: EngineInterface) =>
-  (await $.config.list()).find(r => r.key === 'verbose')?.value === true
+// /hush toggles: off, Read and Bash rows are the engine's own, full call and output.
+// ToolUse carries no per-row expand flag, and verbose is often left on for good.
+// ponytail: module variable, so a plugin reload turns it back on; $.state if that matters
+let hushed = true
 
 export const register: Register = on => {
-  // render answers are cached; flipping verbose redraws the rows
-  on('config.set', { key: 'verbose' }, async ($, e, next) => {
-    const result = await next(e)
+  on('session.start', async ($, e, next) => {
+    await $.command.register({ name: 'hush', description: 'Toggle compact Read/Bash rows (off: full command and output)' })
+    return next(e)
+  })
+
+  on('command.run', { command: 'hush' }, async $ => {
+    hushed = !hushed
     $.ui.invalidate('ui.render')
-    return result
+    return { text: hushed ? 'hush-ui: tool rows compact' : 'hush-ui: tool rows in full' }
   })
 
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
@@ -89,7 +93,7 @@ export const register: Register = on => {
   // Read / Bash rows: one dim line, `Read   path · 218 lines`. Errors stay loud:
   // the header says failed and the engine's ToolResult below shows the error text.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!COMPACT_TOOLS.has(e.props.tool) || (await isVerbose($))) return next(e)
+    if (!COMPACT_TOOLS.has(e.props.tool) || !hushed) return next(e)
     const { isRunning, isErrored, isInterrupted, output } = e.props
     const state = isRunning ? '…' : isInterrupted ? 'interrupted' : isErrored ? ['failed', exitCodeOf(output) && `exit ${exitCodeOf(output)}`].filter(Boolean).join(' · ') : resultOf(e.props.tool, output)
     const command = commandOf(e.props.tool, e.props.input)
@@ -130,7 +134,7 @@ export const register: Register = on => {
 
   // the summary already sits on the ToolUse line; a successful result draws nothing
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!COMPACT_TOOLS.has(e.props.tool) || e.props.isErrored || (await isVerbose($))) return next(e)
+    if (!COMPACT_TOOLS.has(e.props.tool) || e.props.isErrored || !hushed) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })

@@ -1,4 +1,4 @@
-import type { On, RenderElement } from 'claude-code'
+import type { RenderElement } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 import { callOf, commandOf, errorLinesOf, exitCodeOf, resultOf } from '../hooks/tools'
 
@@ -26,16 +26,9 @@ test('summaries for Read and Bash', () => {
   expect(exitCodeOf('permission denied')).toBeNull()
 })
 
-// the engine's /config rows; tests flip verbose
-let verbose = false
-const config = (on: On) =>
-  on('config.list', () => ({ value: [{ key: 'verbose', label: 'Verbose', kind: 'boolean', value: verbose, provider: { plugin: 'engine', tier: 'core' } }] as never }))
-
 const BASH = { tool_use_id: 't1', tool: 'Bash', input: { command: 'pytest', description: 'Run tests' }, isRunning: false, isInterrupted: false }
 
-test('Bash row is one line with its verdict; failure is loud', async ($, on) => {
-  verbose = false
-  config(on)
+test('Bash row is one line with its verdict; failure is loud', async $ => {
   for (const surface of SURFACES) {
     const ok = await $.ui.mount({
       plugin: 'hush-ui', surface, component: 'ToolUse',
@@ -58,8 +51,6 @@ test('Bash row is one line with its verdict; failure is loud', async ($, on) => 
 })
 
 test('result block: hidden on success, engine-drawn on error and for other tools', async ($, on) => {
-  verbose = false
-  config(on)
   on('ui.render', { component: 'ToolResult' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return h(Text, null, 'ENGINE') as RenderElement
@@ -74,9 +65,7 @@ test('result block: hidden on success, engine-drawn on error and for other tools
   }
 })
 
-test('verbose on: Bash rows are the engine\'s full drawing', async ($, on) => {
-  verbose = true
-  config(on)
+test('/hush off: Bash rows are the engine\'s full drawing, /hush again compacts', async ($, on) => {
   on('ui.render', { component: 'ToolUse' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return h(Text, null, 'ENGINE') as RenderElement
@@ -85,10 +74,14 @@ test('verbose on: Bash rows are the engine\'s full drawing', async ($, on) => {
     const { Text } = $.ui.resolve(e)
     return h(Text, null, 'ENGINE') as RenderElement
   })
+  await $.command.run({ command: 'hush' } as never)
   for (const surface of SURFACES) {
     const use = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolUse', props: { ...BASH, isErrored: false, output: { stdout: '', stderr: '', interrupted: false } } })
     expect(JSON.stringify(await use.drawn())).toContain('ENGINE')
     const result = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolResult', props: { tool_use_id: 't1', tool: 'Bash', output: {}, isErrored: false } })
     expect(JSON.stringify(await result.drawn())).toContain('ENGINE')
   }
+  await $.command.run({ command: 'hush' } as never)
+  const back = await $.ui.mount({ plugin: 'hush-ui', surface: 'terminal', component: 'ToolResult', props: { tool_use_id: 't9', tool: 'Bash', output: {}, isErrored: false } })
+  expect(JSON.stringify(await back.drawn())).not.toContain('ENGINE')
 })
