@@ -13,7 +13,8 @@ const shortPath = (p: string): string => p.split('/').filter(Boolean).slice(-2).
 export const callOf = (tool: string, input: unknown): string => {
   const i = obj(input)
   if (tool === 'Read') return shortPath(str(i.file_path))
-  if (tool === 'Bash') return clip(str(i.description) || str(i.command).split('\n')[0]!)
+  // unclipped: the row truncates it to the terminal's width
+  if (tool === 'Bash') return str(i.description) || str(i.command).split('\n')[0]!
   return ''
 }
 
