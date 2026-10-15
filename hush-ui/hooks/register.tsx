@@ -1,4 +1,5 @@
-import type { Register } from 'claude-code'
+import { atom, read, update } from 'claude-code'
+import type { Register, Timer } from 'claude-code'
 import { COMPACT_TOOLS, callOf, commandOf, detailOf, errorLinesOf, exitCodeOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
@@ -27,6 +28,14 @@ const BAR = Array(200).fill('▍').join('\n')
 // ponytail: raw hex, so another WezTerm scheme keeps these; theme keys if it switches often
 const CALLOUT = { paper: '#E4D8C5', errPaper: '#EBD9CC', ink: '#6A5C4A', red: '#A44837' }
 const ICON_COLUMNS = 3
+// Ported from the skins plugin's `vellum` light palette, for the spinner and turn footer.
+// ponytail: light only, as WezTerm runs Paper Ink Vellum; a dark set if that changes
+const VELLUM = { accent: '#655576', fg: '#57504a', muted: '#6a5c4a', ok: '#53603b', err: '#8c4b3f' }
+const SPINNER_WORDS = ['Pressing', 'Ruling', 'Inking', 'Drying', 'Binding', 'Warming']
+const DONE_WORDS = ['Pressed', 'Ruled', 'Inked', 'Bound']
+const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const FRAME_MS = 90
+const KEPT_TURNS = 40
 
 // CJK and fullwidth forms take two cells
 const cellsOf = (s: string): number => {
@@ -57,15 +66,123 @@ export const tableCellsOf = (text: string): number => {
   return widest
 }
 
+// The same seed always picks the same word, so a row keeps it when it redraws.
+const pick = (words: readonly string[], seed: string): string => {
+  let hash = 5381
+  for (let i = 0; i < seed.length; i++) hash = (hash * 33 + seed.charCodeAt(i)) >>> 0
+  return words[hash % words.length] ?? seed
+}
+
+export const formatDuration = (ms: number): string => {
+  const seconds = Math.round(ms / 1000)
+  return seconds < 1 ? '<1s' : seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
+// Lines added and removed, read from an Edit or Write result's patch.
+export const diffstatOf = (result: unknown): { added: number; removed: number } => {
+  const patch = (result as { structuredPatch?: unknown } | null)?.structuredPatch
+  const lines = Array.isArray(patch) ? patch.flatMap(hunk => (hunk as { lines?: unknown } | null)?.lines ?? []).filter((l): l is string => typeof l === 'string') : []
+  return { added: lines.filter(l => l.startsWith('+')).length, removed: lines.filter(l => l.startsWith('-')).length }
+}
+
+type TurnStats = { tools: number; added: number; removed: number }
+const NO_STATS: TurnStats = { tools: 0, added: 0, removed: 0 }
+// The footer only gets durationMs, so each finished turn's stats are kept under it.
+const turnsAtom = atom({ plugin: 'hush-ui', key: 'turns' } as const, {} as Record<string, TurnStats>)
+const frameAtom = atom({ plugin: 'hush-ui', key: 'frame' } as const, 0)
+const startedAtom = atom({ plugin: 'hush-ui', key: 'startedAt' } as const, 0)
+
 // /hush toggles: off, Read and Bash rows become a callout with the full call and output.
 // ToolUse carries no per-row expand flag, and verbose is often left on for good.
 // ponytail: module variable, so a plugin reload turns it back on; $.state if that matters
 let hushed = true
 
 export const register: Register = on => {
+  // what the main loop's turn has done so far, for its footer
+  let stats = NO_STATS
+  let isWorking = false
+  let ticker: Timer | undefined
+
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'hush', description: 'Toggle compact Read/Bash rows (off: full command and output)' })
+    // only the spinner reads the frame, so a tick redraws the spinner and nothing else
+    ticker?.cancel()
+    ticker = $.clock.every(FRAME_MS, () => {
+      if (isWorking) void update($, frameAtom, frame => frame + 1)
+    })
     return next(e)
+  })
+
+  on('turn.start', async ($, e, next) => {
+    stats = NO_STATS
+    isWorking = true
+    const now = await $.clock.now()
+    await update($, startedAtom, () => now)
+    return next(e)
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const ran = await next(e)
+    if (e.agentId === undefined && ran.deny === undefined) {
+      const diff = diffstatOf(ran.result)
+      stats = { tools: stats.tools + 1, added: stats.added + diff.added, removed: stats.removed + diff.removed }
+    }
+    return ran
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      isWorking = false
+      const finished = stats
+      await update($, turnsAtom, turns => Object.fromEntries([...Object.entries(turns), [String(e.durationMs), finished]].slice(-KEPT_TURNS)))
+    }
+    return next(e)
+  })
+
+  // The spinner (thinking, compacting) gets a line's breath above it. Its own word
+  // shimmers: a band of light sweeps through it, one letter a frame.
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const word = pick(SPINNER_WORDS, e.props.word)
+    if (e.props.message !== null) return <Box marginTop={1}>{await next({ ...e, props: { ...e.props, word } })}</Box>
+    const frame = await read($, frameAtom)
+    const startedAt = await read($, startedAtom)
+    const elapsed = startedAt === 0 ? 0 : (await $.clock.now()) - startedAt
+    const letters = [...word]
+    const head = (frame % (letters.length + 8)) - 4
+    const shade = (i: number) => (i === head ? VELLUM.fg : Math.abs(i - head) === 1 ? VELLUM.accent : VELLUM.muted)
+    return (
+      <Box marginTop={1}>
+        <Text>
+          <Text color={VELLUM.accent}>{`${FRAMES[frame % FRAMES.length]} `}</Text>
+          {letters.map((letter, i) => <Text key={i} color={shade(i)}>{letter}</Text>)}
+          <Text color={VELLUM.muted}>{`…  ${formatDuration(elapsed)}`}</Text>
+        </Text>
+      </Box>
+    )
+  })
+
+  // The turn footer, `✓ Pressed   17s   1 tool   +12 −3`, in the reply's text column.
+  on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const turn = (await read($, turnsAtom))[String(e.props.durationMs)]
+    const tools = turn?.tools ?? 0
+    const hasDiff = turn !== undefined && turn.added + turn.removed > 0
+    return (
+      <Box marginTop={1} paddingLeft={PAD}>
+        <Text color={VELLUM.muted}>
+          <Text color={VELLUM.accent}>{'✓ '}</Text>
+          {pick(DONE_WORDS, e.props.word)}
+          <Text color={VELLUM.fg}>{`   ${formatDuration(e.props.durationMs)}`}</Text>
+          {tools > 0 && <Text color={VELLUM.fg}>{`   ${tools}`}</Text>}
+          {tools > 0 && ` tool${tools === 1 ? '' : 's'}`}
+          {hasDiff && <Text color={VELLUM.ok}>{`   +${turn.added}`}</Text>}
+          {hasDiff && <Text color={VELLUM.err}>{` −${turn.removed}`}</Text>}
+        </Text>
+      </Box>
+    )
   })
 
   on('command.run', { command: 'hush' }, async $ => {

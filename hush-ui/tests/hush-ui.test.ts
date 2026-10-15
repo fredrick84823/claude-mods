@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
-import { tableCellsOf } from '../hooks/register'
+import { diffstatOf, formatDuration, tableCellsOf } from '../hooks/register'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -91,4 +91,17 @@ test('a table that would need shrinking drops the padding', async $ => {
     })
     expect(await mid.drawn()).toMatchObject({ props: { paddingLeft: 0, paddingRight: 2 } })
   }
+})
+
+test('turn footer: breath above, reply column, time; diffstat and duration helpers', async $ => {
+  const ui = await $.ui.mount({
+    plugin: 'hush-ui', surface: 'terminal', component: 'TurnDuration',
+    props: { word: 'Baked', durationMs: 64000 },
+  })
+  const tree = await ui.drawn()
+  expect(tree).toMatchObject({ type: 'Box', props: { marginTop: 1, paddingLeft: 5 } })
+  expect(JSON.stringify(tree)).toContain('1m 4s')
+  expect(formatDuration(400)).toBe('<1s')
+  expect(diffstatOf({ structuredPatch: [{ lines: ['+a', '+b', '-c', ' d'] }] })).toEqual({ added: 2, removed: 1 })
+  expect(diffstatOf(undefined)).toEqual({ added: 0, removed: 0 })
 })
