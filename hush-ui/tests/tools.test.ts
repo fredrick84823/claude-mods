@@ -11,9 +11,9 @@ test('summaries for Read and Bash', () => {
   expect(callOf('Bash', { command: 'pytest -q\necho hi' })).toBe('pytest -q')
   // never clipped here: the row truncates to the terminal's width
   expect(callOf('Bash', { command: 'x', description: 'd'.repeat(120) })).toBe('d'.repeat(120))
-  expect(detailOf('Bash', { command: 'ls' }, { stdout: 'a\nb\nc\n', stderr: '' }, 2)).toBe('$ ls\na\nb\n… 1 more lines')
-  expect(detailOf('Bash', { command: 'ls' }, 'Exit code 1\nnope')).toBe('$ ls\nExit code 1\nnope')
-  expect(detailOf('Read', { file_path: '/a/b/c.ts' }, {})).toBe('/a/b/c.ts')
+  expect(detailOf('Bash', { command: 'ls' }, { stdout: 'a\nb\nc\n', stderr: '' }, 2)).toEqual({ command: '$ ls', output: 'a\nb\n… 1 more lines' })
+  expect(detailOf('Bash', { command: 'ls' }, 'Exit code 1\nnope')).toEqual({ command: '$ ls', output: 'Exit code 1\nnope' })
+  expect(detailOf('Read', { file_path: '/a/b/c.ts' }, {})).toEqual({ command: '/a/b/c.ts', output: '' })
   expect(resultOf('Bash', { stdout: '42 passed\n', stderr: '', interrupted: false })).toBe('42 passed')
   expect(resultOf('Bash', { stdout: 'a\n\nb\n87: noise\n', stderr: '', interrupted: false })).toBe('3 lines')
   expect(resultOf('Bash', { stdout: '', stderr: '', interrupted: false })).toBe('no output')
@@ -68,7 +68,7 @@ test('result block: hidden on success, engine-drawn on error and for other tools
   }
 })
 
-test('/hush off: the row carries a grey card with the full call and output; /hush again drops it', async ($, on) => {
+test('/hush off: the row becomes a callout with the full call and output; /hush again compacts', async ($, on) => {
   on('ui.render', { component: 'ToolResult' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return h(Text, null, 'ENGINE') as RenderElement
@@ -78,14 +78,18 @@ test('/hush off: the row carries a grey card with the full call and output; /hus
   for (const surface of SURFACES) {
     const use = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolUse', props: { ...long, isErrored: false, output: { stdout: '42 passed', stderr: '', interrupted: false } } })
     const tree = JSON.stringify(await use.drawn())
-    expect(tree).toContain('$ pytest -q\\n  --maxfail=1\\n42 passed')
-    expect(tree).toContain('"color":"inactive"')
-    expect(tree).toContain('userMessageBackground')
-    // an error goes in the card too, so the engine's result block stays hidden
-    const bad = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolResult', props: { tool_use_id: 't2', tool: 'Bash', output: 'boom', isErrored: true } })
-    expect(JSON.stringify(await bad.drawn())).not.toContain('ENGINE')
+    expect(tree).toContain('$ pytest -q\\n  --maxfail=1')
+    expect(tree).toContain('"42 passed"')
+    expect(tree).toContain('#E4D8C5')
+    const bad = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolUse', props: { ...long, isErrored: true, output: 'Exit code 1\nboom' } })
+    const badTree = JSON.stringify(await bad.drawn())
+    expect(badTree).toContain('"!"')
+    expect(badTree).toContain('#A44837')
+    // the error is in the callout, so the engine's result block stays hidden
+    const result = await $.ui.mount({ plugin: 'hush-ui', surface, component: 'ToolResult', props: { tool_use_id: 't2', tool: 'Bash', output: 'boom', isErrored: true } })
+    expect(JSON.stringify(await result.drawn())).not.toContain('ENGINE')
   }
   await $.command.run({ command: 'hush' } as never)
   const back = await $.ui.mount({ plugin: 'hush-ui', surface: 'terminal', component: 'ToolUse', props: { ...long, tool_use_id: 't9', isErrored: false, output: { stdout: '42 passed', stderr: '', interrupted: false } } })
-  expect(JSON.stringify(await back.drawn())).not.toContain('userMessageBackground')
+  expect(JSON.stringify(await back.drawn())).not.toContain('#E4D8C5')
 })

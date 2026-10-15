@@ -1,6 +1,6 @@
 {
   "name": "hush-ui",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "A quieter Claude Code transcript, presentation only: prompts as cards, Read/Bash rows on one line (failures stay loud), side padding around replies. Stacks with mermaid-draw. Needs function hooks (early access).",
   "author": {
     "name": "Fredrick"

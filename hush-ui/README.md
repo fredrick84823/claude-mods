@@ -10,8 +10,9 @@ transcript is drawn, never what Claude said or did.
 | a failed Bash | the error under `⎿` | the row turns red with `failed · exit N` and the first error lines |
 | replies | text from the edge, bullet at column 0 | 5 columns of room each side, the `●` hung in the left room |
 
-`/hush` toggles a card under each Read / Bash row, drawn like the prompt card
-with a grey bar: the full command and up to 40 lines of output. Again hides it.
+`/hush` turns each Read / Bash row into a callout: a paper block in the WezTerm
+Vellum palette, `$` (or `!` on failure) in its icon column, the header on its
+first line, then the full command and up to 40 lines of output. Again compacts.
 
 Tables keep their natural width: the side room shrinks just enough for the
 widest table in a reply. A reply holding a ```` ```mermaid ```` fence is left
