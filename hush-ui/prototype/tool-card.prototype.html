@@ -1,0 +1,152 @@
+<!doctype html>
+<!-- PROTOTYPE, throw away: four /hush full-mode tool cards drawn cell by cell in the
+     WezTerm "Paper Ink Vellum" palette. Every glyph is one the terminal can draw
+     (Ink Box borderStyle round/single, backgroundColor, Text colour), so what you
+     pick here is what hush-ui can render. Switch with ?variant=A..D or the bar below. -->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hush-ui tool card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* ~/.config/wezterm/vellum.lua */
+    --bg: #EEE5D5; --fg: #57504A; --ink: #6A5C4A; --split: #CEC0A9;
+    --tab: #E4D8C5; --sel: #D5C5AA; --red: #A44837; --green: #576B33;
+    --yellow: #865E1B; --blue: #446685; --cyan: #367061;
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 14px/1.08 'JetBrains Mono', Menlo, monospace; padding: 14px 14px 96px; }
+  .term { white-space: pre; overflow-x: auto; }
+  .line { height: 1.08em; }
+  .dim { opacity: .62; }
+  /* the terminal gives CJK two cells; the browser's glyph is not 2ch wide */
+  .w { display: inline-block; width: 2ch; text-align: center; }
+  .b { font-weight: 700; }
+  .note { font: 13px/1.5 -apple-system, system-ui, sans-serif; color: var(--ink); max-width: 760px; margin: 0 0 14px; }
+  .note b { color: var(--fg); }
+  .bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; gap: 6px;
+         background: var(--tab); border: 1px solid var(--split); border-radius: 10px; padding: 6px;
+         font: 13px -apple-system, system-ui, sans-serif; box-shadow: 0 2px 10px #6A5C4A22; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 32px); }
+  .bar button { font: inherit; border: 0; border-radius: 7px; padding: 6px 10px; background: transparent; color: var(--ink); cursor: pointer; }
+  .bar button[aria-pressed=true] { background: var(--bg); color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+<p class="note" id="note"></p>
+<div class="term" id="term"></div>
+<div class="bar" id="bar"></div>
+<script>
+// ---- palette and cells -------------------------------------------------------
+const C = { bg: '#EEE5D5', fg: '#57504A', ink: '#6A5C4A', split: '#CEC0A9', tab: '#E4D8C5', sel: '#D5C5AA', red: '#A44837', green: '#576B33', blue: '#446685' }
+const COLS = 104, PAD = 5, TOOL = 7, BULLET = 3
+const wide = ch => /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch)
+const cells = s => [...s].reduce((n, ch) => n + (wide(ch) ? 2 : 1), 0)
+const fit = (s, n) => { let out = '', w = 0; for (const ch of s) { const c = wide(ch) ? 2 : 1; if (w + c > n) return out.slice(0, -1) + '…' + ' '.repeat(n - w); out += ch; w += c } return out + ' '.repeat(n - w) }
+// a segment: [text, {fg, bg, dim, b}]
+const seg = (t, o = {}) => [t, o]
+const sp = n => seg(' '.repeat(Math.max(0, n)))
+
+// ---- the transcript around the card ------------------------------------------
+const PROMPT = '幫我把 hush-ui 的 /hush 卡片改成 callout 風格'
+const REPLY = '通過。更新 README，然後發布 0.2.3。'
+const CALL = { tool: 'Bash', desc: 'Document, bump 0.2.3, commit, push, update plugin', state: '3 lines',
+  cmd: ["python3 - <<'EOF'", "p='README.md'", "s=open(p).read()", "EOF", "sed -i '' 's/\"version\": \"0.2.2\"/\"version\": \"0.2.3\"/' .claude-plugin/plugin.json", "G=/usr/bin/git; cd .. && $G add hush-ui && $G commit -q -F - <<'EOF'"],
+  out: ['d45aede hush-ui: /hush shows a grey card, not the engine\'s tool rows', '✔ Successfully updated marketplace: mods', '✔ Plugin "hush-ui" updated from 0.2.2 to 0.2.3 for scope user.'] }
+const FAIL = { tool: 'Bash', desc: 'Type card body, recheck tsc', state: 'failed · exit 2',
+  cmd: ['bunx -p typescript tsc -p scratchpad/tsc/tsconfig.json'], out: ["hooks/register.tsx(73,7): error TS2322: Type 'unknown' is not assignable to type 'RenderChildren'."] }
+
+const promptCard = () => {
+  const w = COLS - (PAD - BULLET) - PAD
+  const row = t => [sp(PAD - BULLET), seg('▍', { fg: C.fg, bg: C.tab }), seg(fit(' '.repeat(BULLET - 1) + t, w - 1), { bg: C.tab })]
+  return [[], row(''), row(PROMPT), row(''), []]
+}
+const reply = t => [[sp(PAD - BULLET), seg('●  '), seg(t)], []]
+const header = (c, err) => [sp(PAD), seg(fit(c.tool, TOOL), err ? { fg: C.red } : { dim: 1 }), seg(c.desc, err ? { b: 1 } : { dim: 1 }), seg(' · ' + c.state, err ? { b: 1, fg: C.red } : { dim: 1 })]
+
+// body lines of a card: the command, then what it printed
+const bodyOf = (c, err) => [
+  ...c.cmd.map((l, i) => [seg((i ? '  ' : '$ ') + l, { fg: C.fg })]),
+  ...c.out.map(l => [seg(l, err ? { fg: C.red } : { dim: 1 })]),
+]
+// clip a body line to n cells, keeping each segment's style
+const clip = (line, n, bg) => {
+  const out = []; let left = n
+  for (const [t, o] of line) { if (left <= 0) break; const s = cells(t) > left ? fit(t, left) : t; out.push(seg(s, { ...o, bg })); left -= cells(s) }
+  if (left > 0) out.push(seg(' '.repeat(left), { bg }))
+  return out
+}
+
+// ---- the four cards ----------------------------------------------------------
+const L = PAD + TOOL - BULLET      // card's left edge: under the tool name's last letters
+const W = COLS - L - PAD           // card's outer width
+
+const VARIANTS = {
+  A: {
+    name: 'A · Callout',
+    note: '<b>Notion callout。</b>淡底（WezTerm tab bar 色 #E4D8C5）加圓角細框（split 色 #CEC0A9）。標題列在卡片外，卡片從工具名下方開始，左右各留一格內距。',
+    draw(c, err) {
+      const bg = C.tab, edge = { fg: err ? C.red : C.split }
+      const top = [sp(L), seg('╭' + '─'.repeat(W - 2) + '╮', edge)]
+      const bot = [sp(L), seg('╰' + '─'.repeat(W - 2) + '╯', edge)]
+      const mid = l => [sp(L), seg('│', edge), seg(' ', { bg }), ...clip(l, W - 4, bg), seg(' ', { bg }), seg('│', edge)]
+      return [header(c, err), top, ...bodyOf(c, err).map(mid), bot]
+    },
+  },
+  B: {
+    name: 'B · Callout + 圖示',
+    note: '<b>Notion callout 的原型。</b>無框，只有淡底色塊，左上一個圖示欄（<code>$</code> 成功、<code>!</code> 失敗）。標題收進卡片第一行，整張卡片就是這個工具的全部。',
+    draw(c, err) {
+      const bg = err ? '#EBD9CC' : C.tab
+      const icon = err ? '!' : '$'
+      const titled = [[seg(c.tool + '  ', err ? { fg: C.red, b: 1 } : { b: 1 }), seg(c.desc, { dim: !err }), seg(' · ' + c.state, err ? { fg: C.red } : { dim: 1 })], ...bodyOf(c, err)]
+      const blank = [sp(PAD), seg(' '.repeat(COLS - 2 * PAD), { bg })]
+      const row = (l, i) => [sp(PAD), seg(i === 0 ? ` ${icon} ` : '   ', { bg, fg: err ? C.red : C.ink, b: 1 }), ...clip(l, COLS - 2 * PAD - 4, bg), seg(' ', { bg })]
+      return [blank, ...titled.map(row), blank]
+    },
+  },
+  C: {
+    name: 'C · 框線標題',
+    note: '<b>無底色，只有圓角框。</b>標題嵌在上框線裡（<code>╭─ Bash · … ─╮</code>），最省版面、最安靜；跟背景同色，靠框線分隔。',
+    draw(c, err) {
+      const edge = { fg: err ? C.red : C.split }
+      const title = ` ${c.tool} · ${c.desc} · ${c.state} `
+      const w = COLS - 2 * PAD
+      const t = fit(title, Math.min(cells(title), w - 6))
+      const top = [sp(PAD), seg('╭─', edge), seg(t, err ? { fg: C.red, b: 1 } : { dim: 1 }), seg('─'.repeat(w - 3 - cells(t)) + '╮', edge)]
+      const bot = [sp(PAD), seg('╰' + '─'.repeat(w - 2) + '╯', edge)]
+      const mid = l => [sp(PAD), seg('│ ', edge), ...clip(l, w - 4), seg(' │', edge)]
+      return [top, ...bodyOf(c, err).map(mid), bot]
+    },
+  },
+  D: {
+    name: 'D · 卡片 + 灰側線（修好對齊）',
+    note: '<b>目前 0.2.3 的設計，只修跑版。</b>側線和卡片同高、從標題下一行開始，標題不再被蓋住。對照用：這就是 markdown quote 感。',
+    draw(c, err) {
+      const bg = C.tab, w = W
+      const row = l => [sp(L), seg('▍', { fg: err ? C.red : C.split, bg }), seg('  ', { bg }), ...clip(l, w - 4, bg), seg(' ', { bg })]
+      return [header(c, err), ...bodyOf(c, err).map(row)]
+    },
+  },
+}
+
+// ---- render ------------------------------------------------------------------
+const esc = s => [...s.replace(/&/g, '&amp;').replace(/</g, '&lt;')].map(ch => wide(ch) ? `<span class="w">${ch}</span>` : ch).join('')
+const html = line => line.map(([t, o]) => {
+  const st = [o.fg && `color:${o.fg}`, o.bg && `background:${o.bg}`].filter(Boolean).join(';')
+  const cls = [o.dim && 'dim', o.b && 'b'].filter(Boolean).join(' ')
+  return `<span${cls ? ` class="${cls}"` : ''}${st ? ` style="${st}"` : ''}>${esc(t)}</span>`
+}).join('')
+
+const variant = (new URLSearchParams(location.search).get('variant') || 'A').toUpperCase()
+const v = VARIANTS[variant] || VARIANTS.A
+const lines = [...promptCard(), ...reply(REPLY), ...v.draw(CALL, false), [], ...v.draw(FAIL, true), [], ...reply('下一步：選一個變體，我再寫進 hush-ui。')]
+document.getElementById('term').innerHTML = lines.map(l => `<div class="line">${html(l)}</div>`).join('')
+document.getElementById('note').innerHTML = `變體 ${v.name}：${v.note}`
+document.getElementById('bar').innerHTML = Object.entries(VARIANTS).map(([k, x]) =>
+  `<button aria-pressed="${k === variant}" onclick="location.search='?variant=${k}'">${x.name}</button>`).join('')
+</script>
+</body>
+</html>
