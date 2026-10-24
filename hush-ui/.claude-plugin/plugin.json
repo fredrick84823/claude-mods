@@ -1,6 +1,6 @@
 {
   "name": "hush-ui",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "A quieter Claude Code transcript, presentation only: prompts as cards, Read/Bash rows on one line (failures stay loud), side padding around replies. Stacks with mermaid-draw. Needs function hooks (early access).",
   "author": {
     "name": "Fredrick"
@@ -8,5 +8,15 @@
   "homepage": "https://github.com/fredrick84823/claude-mods",
   "repository": "https://github.com/fredrick84823/claude-mods",
   "license": "MIT",
-  "keywords": ["transcript", "terminal", "function-hooks", "mod"]
+  "keywords": ["transcript", "terminal", "function-hooks", "mod"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "palette": {
+      "type": "string",
+      "title": "Palette",
+      "description": "vellum: the built-in Vellum colours. theme: follow the Claude Code theme's keys, so a custom theme recolours the spinner, footer and /hush callout.",
+      "default": "vellum",
+      "options": ["vellum", "theme"]
+    }
+  }
 }

@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
-import { diffstatOf, formatDuration, tableCellsOf } from '../hooks/register'
+import { expect, mock, test } from 'claude-code/testing'
+import { diffstatOf, formatDuration, paletteOf, tableCellsOf } from '../hooks/register'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -104,4 +104,31 @@ test('turn footer: breath above, reply column, time; diffstat and duration helpe
   expect(formatDuration(400)).toBe('<1s')
   expect(diffstatOf({ structuredPatch: [{ lines: ['+a', '+b', '-c', ' d'] }] })).toEqual({ added: 2, removed: 1 })
   expect(diffstatOf(undefined)).toEqual({ added: 0, removed: 0 })
+})
+
+test('palette: vellum hex by default, theme keys under palette=theme', async $ => {
+  const footer = { plugin: 'hush-ui', surface: 'terminal', component: 'TurnDuration', props: { word: 'Baked', durationMs: 3000 } } as const
+  const drawn = JSON.stringify(await (await $.ui.mount(footer)).drawn())
+  expect(drawn).toContain('#655576')
+  expect(drawn).not.toContain('"inactive"')
+})
+
+test('palette=theme draws the footer in theme keys', { options: { palette: 'theme' } }, async $ => {
+  const ui = await $.ui.mount({ plugin: 'hush-ui', surface: 'terminal', component: 'TurnDuration', props: { word: 'Baked', durationMs: 3000 } })
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('"claude"')
+  expect(drawn).toContain('"inactive"')
+  expect(drawn).not.toContain('#655576')
+  expect(paletteOf('theme').paper).toBe('bashMessageBackgroundColor')
+  expect(paletteOf(undefined).paper).toBe('#E4D8C5')
+})
+
+test('spinner ticks after a reload that skips session.start, as a palette change does', async ($, on) => {
+  const clock = mock.clock(on)
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  const spinner = { plugin: 'hush-ui', surface: 'terminal', component: 'Spinner', props: { word: 'Baking', message: null, suffix: '', mode: 'thinking' } } as const
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  expect(JSON.stringify(await (await $.ui.mount(spinner)).drawn())).toContain('⠋ ')
+  await clock.advance(100)
+  expect(JSON.stringify(await (await $.ui.mount(spinner)).drawn())).toContain('⠙ ')
 })

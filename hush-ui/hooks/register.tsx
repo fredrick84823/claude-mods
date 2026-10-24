@@ -1,5 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
+import type { TurnStats } from '../types'
 import { COMPACT_TOOLS, callOf, commandOf, detailOf, errorLinesOf, exitCodeOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
@@ -23,14 +24,18 @@ const PROMPT_BACKGROUND = 'userMessageBackground'
 // left three-eighths block on the card's background: the line is the card's outer edge
 // ponytail: 200 rows; a prompt card taller than that shows the bar only on its top 200
 const BAR = Array(200).fill('▍').join('\n')
-// /hush off callout: a Notion-style block in the WezTerm "Paper Ink Vellum" palette
-// (~/.config/wezterm/vellum.lua): tab-bar paper, ink, its red on a warmer paper.
-// ponytail: raw hex, so another WezTerm scheme keeps these; theme keys if it switches often
-const CALLOUT = { paper: '#E4D8C5', errPaper: '#EBD9CC', ink: '#6A5C4A', red: '#A44837' }
+// Colours of the /hush callout (paper, errPaper, ink, red) and of the spinner and
+// turn footer (accent, fg, muted, ok, err), picked by the `palette` option.
+// vellum: the WezTerm "Paper Ink Vellum" palette (~/.config/wezterm/vellum.lua) for the
+// callout, and the skins plugin's `vellum` light palette for the spinner and footer.
+// theme: Claude Code theme keys, so a custom theme file recolours them live.
+// ponytail: vellum is light only, as WezTerm runs Paper Ink Vellum; a dark set if that changes
+const PALETTES = {
+  vellum: { paper: '#E4D8C5', errPaper: '#EBD9CC', ink: '#6A5C4A', red: '#A44837', accent: '#655576', fg: '#57504a', muted: '#6a5c4a', ok: '#53603b', err: '#8c4b3f' },
+  theme: { paper: 'bashMessageBackgroundColor', errPaper: 'diffRemoved', ink: 'inactive', red: 'error', accent: 'claude', fg: 'text', muted: 'inactive', ok: 'success', err: 'error' },
+}
+export const paletteOf = (name: unknown) => (name === 'theme' ? PALETTES.theme : PALETTES.vellum)
 const ICON_COLUMNS = 3
-// Ported from the skins plugin's `vellum` light palette, for the spinner and turn footer.
-// ponytail: light only, as WezTerm runs Paper Ink Vellum; a dark set if that changes
-const VELLUM = { accent: '#655576', fg: '#57504a', muted: '#6a5c4a', ok: '#53603b', err: '#8c4b3f' }
 const SPINNER_WORDS = ['Pressing', 'Ruling', 'Inking', 'Drying', 'Binding', 'Warming']
 const DONE_WORDS = ['Pressed', 'Ruled', 'Inked', 'Bound']
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -85,7 +90,6 @@ export const diffstatOf = (result: unknown): { added: number; removed: number } 
   return { added: lines.filter(l => l.startsWith('+')).length, removed: lines.filter(l => l.startsWith('-')).length }
 }
 
-type TurnStats = { tools: number; added: number; removed: number }
 const NO_STATS: TurnStats = { tools: 0, added: 0, removed: 0 }
 // The footer only gets durationMs, so each finished turn's stats are kept under it.
 const turnsAtom = atom({ plugin: 'hush-ui', key: 'turns' } as const, {} as Record<string, TurnStats>)
@@ -97,7 +101,8 @@ const startedAtom = atom({ plugin: 'hush-ui', key: 'startedAt' } as const, 0)
 // ponytail: module variable, so a plugin reload turns it back on; $.state if that matters
 let hushed = true
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const { paper, errPaper, ink, red, accent, fg, muted, ok, err } = paletteOf(options.palette)
   // what the main loop's turn has done so far, for its footer
   let stats = NO_STATS
   let isWorking = false
@@ -105,15 +110,17 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'hush', description: 'Toggle compact Read/Bash rows (off: full command and output)' })
-    // only the spinner reads the frame, so a tick redraws the spinner and nothing else
     ticker?.cancel()
-    ticker = $.clock.every(FRAME_MS, () => {
-      if (isWorking) void update($, frameAtom, frame => frame + 1)
-    })
+    ticker = undefined
     return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
+    // only the spinner reads the frame, so a tick redraws the spinner and nothing else.
+    // Armed here, not at session.start: a palette change re-runs register without one.
+    ticker ??= $.clock.every(FRAME_MS, () => {
+      if (isWorking) void update($, frameAtom, frame => frame + 1)
+    })
     stats = NO_STATS
     isWorking = true
     const now = await $.clock.now()
@@ -151,13 +158,13 @@ export const register: Register = on => {
     const elapsed = startedAt === 0 ? 0 : (await $.clock.now()) - startedAt
     const letters = [...word]
     const head = (frame % (letters.length + 8)) - 4
-    const shade = (i: number) => (i === head ? VELLUM.fg : Math.abs(i - head) === 1 ? VELLUM.accent : VELLUM.muted)
+    const shade = (i: number) => (i === head ? fg : Math.abs(i - head) === 1 ? accent : muted)
     return (
       <Box marginTop={1}>
         <Text>
-          <Text color={VELLUM.accent}>{`${FRAMES[frame % FRAMES.length]} `}</Text>
-          {letters.map((letter, i) => <Text key={i} color={shade(i)}>{letter}</Text>)}
-          <Text color={VELLUM.muted}>{`…  ${formatDuration(elapsed)}`}</Text>
+          <Text color={accent}>{`${FRAMES[frame % FRAMES.length]} `}</Text>
+          {letters.map((letter, i) => <Text key={String(i)} color={shade(i)}>{letter}</Text>)}
+          <Text color={muted}>{`…  ${formatDuration(elapsed)}`}</Text>
         </Text>
       </Box>
     )
@@ -172,14 +179,14 @@ export const register: Register = on => {
     const hasDiff = turn !== undefined && turn.added + turn.removed > 0
     return (
       <Box marginTop={1} paddingLeft={PAD}>
-        <Text color={VELLUM.muted}>
-          <Text color={VELLUM.accent}>{'✓ '}</Text>
+        <Text color={muted}>
+          <Text color={accent}>{'✓ '}</Text>
           {pick(DONE_WORDS, e.props.word)}
-          <Text color={VELLUM.fg}>{`   ${formatDuration(e.props.durationMs)}`}</Text>
-          {tools > 0 && <Text color={VELLUM.fg}>{`   ${tools}`}</Text>}
+          <Text color={fg}>{`   ${formatDuration(e.props.durationMs)}`}</Text>
+          {tools > 0 && <Text color={fg}>{`   ${tools}`}</Text>}
           {tools > 0 && ` tool${tools === 1 ? '' : 's'}`}
-          {hasDiff && <Text color={VELLUM.ok}>{`   +${turn.added}`}</Text>}
-          {hasDiff && <Text color={VELLUM.err}>{` −${turn.removed}`}</Text>}
+          {hasDiff && <Text color={ok}>{`   +${turn.added}`}</Text>}
+          {hasDiff && <Text color={err}>{` −${turn.removed}`}</Text>}
         </Text>
       </Box>
     )
@@ -222,21 +229,21 @@ export const register: Register = on => {
       // the callout: an icon column, then the header and the whole call on one paper
       const { Box, Text } = $.ui.resolve(e)
       const detail = detailOf(e.props.tool, e.props.input, output)
-      const ink = isErrored ? CALLOUT.red : CALLOUT.ink
+      const iconInk = isErrored ? red : ink
       return (
         <Box paddingLeft={PAD} paddingRight={PAD} marginY={1}>
-          <Box flexGrow={1} flexShrink={1} backgroundColor={isErrored ? CALLOUT.errPaper : CALLOUT.paper} paddingY={1} paddingRight={1}>
+          <Box flexGrow={1} flexShrink={1} backgroundColor={isErrored ? errPaper : paper} paddingY={1} paddingRight={1}>
             <Box width={ICON_COLUMNS} flexShrink={0} justifyContent="center">
-              <Text bold color={ink}>{isErrored ? '!' : '$'}</Text>
+              <Text bold color={iconInk}>{isErrored ? '!' : '$'}</Text>
             </Box>
             <Box flexDirection="column" flexGrow={1} flexShrink={1}>
               <Text>
-                <Text bold color={isErrored ? CALLOUT.red : undefined}>{`${e.props.tool}  `}</Text>
+                <Text bold color={isErrored ? red : undefined}>{`${e.props.tool}  `}</Text>
                 <Text dimColor={!isErrored}>{callOf(e.props.tool, e.props.input)}</Text>
-                <Text dimColor={!isErrored} color={isErrored ? CALLOUT.red : undefined}>{state && ` · ${state}`}</Text>
+                <Text dimColor={!isErrored} color={isErrored ? red : undefined}>{state && ` · ${state}`}</Text>
               </Text>
               {detail.command && <Text>{detail.command}</Text>}
-              {detail.output && <Text dimColor={!isErrored} color={isErrored ? CALLOUT.red : undefined}>{detail.output}</Text>}
+              {detail.output && <Text dimColor={!isErrored} color={isErrored ? red : undefined}>{detail.output}</Text>}
             </Box>
           </Box>
         </Box>
