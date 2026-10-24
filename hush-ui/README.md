@@ -43,6 +43,17 @@ The knobs are constants at the top of `hooks/register.tsx`:
 | `ACCENT` | `undefined` | bullet and prompt-bar colour; `undefined` is the terminal's text colour |
 | `PROMPT_BACKGROUND` | `'userMessageBackground'` | prompt card background, a theme key so light and dark each get theirs |
 
+One option, set in `/config` or in `~/.claude/settings.json`; a change reloads the mod live:
+
+```json
+{ "pluginConfigs": { "hush-ui@mods": { "options": { "palette": "theme" } } } }
+```
+
+| `palette` | spinner, turn footer and `/hush` callout colours |
+| --- | --- |
+| `vellum` (default) | the built-in Vellum hex colours |
+| `theme` | Claude Code theme keys: `claude` (spinner, ✓), `text`, `inactive`, `success`, `error`, `bashMessageBackgroundColor` (callout), `diffRemoved` (failed callout). A custom theme file in `~/.claude/themes/` then recolours them, live |
+
 ## Test
 
 ```sh
