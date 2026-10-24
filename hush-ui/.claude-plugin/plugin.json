@@ -9,6 +9,7 @@
   "repository": "https://github.com/fredrick84823/claude-mods",
   "license": "MIT",
   "keywords": ["transcript", "terminal", "function-hooks", "mod"],
+  "types": "./types/index.d.ts",
   "userConfig": {
     "palette": {
       "type": "string",

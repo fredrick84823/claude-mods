@@ -1,5 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
+import type { TurnStats } from '../types'
 import { COMPACT_TOOLS, callOf, commandOf, detailOf, errorLinesOf, exitCodeOf, resultOf } from './tools'
 
 // Presentation only. The engine's own drawing is laid out at full terminal
@@ -89,7 +90,6 @@ export const diffstatOf = (result: unknown): { added: number; removed: number } 
   return { added: lines.filter(l => l.startsWith('+')).length, removed: lines.filter(l => l.startsWith('-')).length }
 }
 
-type TurnStats = { tools: number; added: number; removed: number }
 const NO_STATS: TurnStats = { tools: 0, added: 0, removed: 0 }
 // The footer only gets durationMs, so each finished turn's stats are kept under it.
 const turnsAtom = atom({ plugin: 'hush-ui', key: 'turns' } as const, {} as Record<string, TurnStats>)
@@ -163,7 +163,7 @@ export const register: Register = (on, options) => {
       <Box marginTop={1}>
         <Text>
           <Text color={accent}>{`${FRAMES[frame % FRAMES.length]} `}</Text>
-          {letters.map((letter, i) => <Text key={i} color={shade(i)}>{letter}</Text>)}
+          {letters.map((letter, i) => <Text key={String(i)} color={shade(i)}>{letter}</Text>)}
           <Text color={muted}>{`…  ${formatDuration(elapsed)}`}</Text>
         </Text>
       </Box>
